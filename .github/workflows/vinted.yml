@@ -1,0 +1,47 @@
+name: Vinted deal finder
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"      # kas 10 min (GitHub realiai gali veluoti)
+  workflow_dispatch:             # rankinis paleidimas
+
+# Du paleidimai vienu metu nevyks (kitaip ateitu dublikatai)
+concurrency:
+  group: vinted-finder
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Idiegti bibliotekas
+        run: pip install requests curl_cffi
+
+      - name: Testai
+        run: python -m unittest discover -s tests -t .
+
+      - name: Paleisti
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python vinted_deal_finder.py
+
+      - name: Issaugoti busena
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          for f in seen.json state.json; do [ -f "$f" ] && git add "$f"; done
+          git diff --cached --quiet || git commit -m "Atnaujinta busena"
+          git pull --rebase --autostash || true
+          git push || true
