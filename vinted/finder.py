@@ -172,7 +172,7 @@ class Run:
         full_url = config.BASE + url_path if url_path.startswith("/") else url_path
 
         deal = {
-            "id": iid, "model": model, "storage": storage, "title": title, "price": price,
+            "id": iid, "model": model, "seller_id": str(seller_id), "storage": storage, "title": title, "price": price,
             "url": full_url, "photo": get_photo_url(item, og), "description": description,
             "condition": condition, "battery": battery, "defects": [d for d, _ in defects],
             "quote": quote, "value": value, "discount": discount, "profit": profit,
@@ -185,15 +185,35 @@ class Run:
         return deal
 
     # --- visas paleidimas --------------------------------------------------------
+    def send_personal(self, deal):
+        """Asmenines zinutes tiems, kas paspaude 🔔 ties siuo modeliu."""
+        for uid, u in self.state.users.items():
+            chat = u.get("chat")
+            if not chat or deal["model"] not in (u.get("watch") or []):
+                continue
+            if deal.get("seller_id") and deal["seller_id"] in (u.get("hide") or []):
+                continue
+            self.tg.send_deal(deal, chat_id=chat)
+            print(f"     -> asmeniskai: {u.get('name') or uid}")
+
     def process_commands(self):
         if not config.cfg["TELEGRAM_COMMANDS"]:
             return
-        updates, offset = self.tg.get_updates(self.state.telegram_offset)
-        for _, text in updates:
-            reply = commands.handle(text, self.state)
-            if reply:
-                print(f"Komanda: {text[:50]}")
-                self.tg.send_message(reply)
+        messages, callbacks, offset = self.tg.get_updates(self.state.telegram_offset)
+        for m in messages:
+            if m["private"]:
+                reply = commands.handle_private(m, self.state)
+                print(f"Asmenine komanda ({m['name']}): {m['text'][:40]}")
+                self.tg.send_message(reply, chat_id=m["chat"])
+            else:
+                reply = commands.handle(m["text"], self.state)
+                if reply:
+                    print(f"Komanda: {m['text'][:50]}")
+                    self.tg.send_message(reply)
+        for cb in callbacks:
+            answer = commands.handle_callback(cb, self.state)
+            print(f"Mygtukas ({cb['name']}): {cb['data']} -> {answer[:40]}")
+            self.tg.answer_callback(cb["id"], answer)
         if offset != self.state.telegram_offset:
             self.state.telegram_offset = offset
             self.state.save()
@@ -255,6 +275,7 @@ class Run:
                 self.state.market.mark_alerted(deal["id"], deal["price"])
                 silent = deal["discount"] < c["LOUD_DISCOUNT"]
                 self.tg.send_deal(deal, silent=silent)
+                self.send_personal(deal)
                 tag = f"atpigo nuo {deal['drop_from']:.0f}, " if deal["drop_from"] else ""
                 print(f"  -> iPhone {deal['model']} {deal['price']:.0f} EUR ({tag}-{deal['discount']:.0%}"
                       f"{', tyliai' if silent else ''}): {deal['title'][:45]}")
