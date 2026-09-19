@@ -64,6 +64,28 @@ class ClientTest(unittest.TestCase):
         self.assertTrue(looks_newest_first(page1))
         self.assertFalse(looks_newest_first(list(reversed(page1))))
 
+    def test_category_filter_and_fallback(self):
+        reset_config(SLEEP_SECONDS=0, CATALOG_IDS=[2342], BRAND_IDS=[12])
+        seen_params = []
+
+        def handler(url, params, headers):
+            seen_params.append(params)
+            if url.endswith(".lt/"):
+                return Resp(200, text="ok")
+            # su filtru – tuscia, be filtro – yra skelbimu
+            if "attribute_ids[catalog]" in params:
+                return Resp(200, {"items": []})
+            return Resp(200, {"items": [item(1, "iPhone 13", 200)]} if params["page"] == 1 else {"items": []})
+
+        sess = FakeSession(handler)
+        c = VintedClient(session_factory=lambda: sess, sleep=lambda s: None)
+        c.session = sess
+        items = quiet(c.fetch_items, "iPhone 13", 2)
+        self.assertEqual(seen_params[0]["attribute_ids[catalog]"], "2342")
+        self.assertEqual(seen_params[0]["brand_ids"], "12")
+        self.assertTrue(c.filters_off)
+        self.assertEqual([i["id"] for i in items], [1])
+
     def test_403_backoff_and_blocked_counter(self):
         reset_config(SLEEP_SECONDS=0, BLOCK_BACKOFF_SECONDS=[0, 0, 0])
         waits = []

@@ -148,6 +148,15 @@ class FlowTest(unittest.TestCase):
             quote = tg.deals[0][0]["quote"]
             self.assertGreater(quote.price, 100)                     # sugede/pigus nesugadino rinkos kainos
 
+    def test_collects_catalog_and_brand_ids(self):
+        reset_config(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0, MIN_SAMPLES=100)
+        with TempDir():
+            cat = [item(1, "iPhone 13 128GB", 200, catalog_id=2342, brand={"id": 12, "title": "Apple"}),
+                   item(2, "Dėklas iPhone 13", 10, catalog_id=9999, brand_id=77)]
+            log = run(FakeClient({"iPhone 13": cat}), FakeTelegram())
+            self.assertIn('"CATALOG_IDS": [2342]', log)
+            self.assertIn('"BRAND_IDS": [12]', log)
+
     def test_query_rotation(self):
         reset_config(SEARCH_QUERIES=["A", "B", "C"], HEARTBEAT_HOURS=0, ROTATE_QUERIES=True)
         with TempDir():
