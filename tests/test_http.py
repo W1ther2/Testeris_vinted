@@ -146,14 +146,29 @@ class TelegramTest(unittest.TestCase):
         quiet(Telegram("t", "42", http).send_deal, self.deal())
         self.assertEqual([m for m, _ in http.posts], ["sendPhoto", "sendMessage"])
 
-    def test_updates_only_from_chat(self):
+    def test_updates_messages_callbacks_and_private(self):
         data = {"ok": True, "result": [
-            {"update_id": 10, "message": {"chat": {"id": 42}, "text": "/kaina 13 180"}},
-            {"update_id": 11, "message": {"chat": {"id": 99}, "text": "/pauze"}},
+            {"update_id": 10, "message": {"chat": {"id": 42}, "from": {"id": 7, "first_name": "Vy"},
+                                          "text": "/kaina 13 180"}},
+            {"update_id": 11, "message": {"chat": {"id": 99, "type": "supergroup"}, "text": "/pauze"}},
             {"update_id": 12, "message": {"chat": {"id": 42}, "text": "labas"}},
+            {"update_id": 13, "message": {"chat": {"id": 555, "type": "private"},
+                                          "from": {"id": 7, "first_name": "Vy"}, "text": "/start"}},
+            {"update_id": 14, "callback_query": {"id": "abc", "data": "w|13 Pro",
+                                                 "from": {"id": 7, "first_name": "Vy"}}},
         ]}
-        ups, offset = Telegram("t", "42", FakeHttp(get_resp=Resp(200, data))).get_updates(0)
-        self.assertEqual((ups, offset), ([(10, "/kaina 13 180")], 12))
+        msgs, cbs, offset = Telegram("t", "42", FakeHttp(get_resp=Resp(200, data))).get_updates(0)
+        self.assertEqual([m["text"] for m in msgs], ["/kaina 13 180", "/start"])
+        self.assertTrue(msgs[1]["private"])
+        self.assertEqual((cbs[0]["data"], cbs[0]["user"], cbs[0]["id"]), ("w|13 Pro", "7", "abc"))
+        self.assertEqual(offset, 14)
+
+    def test_deal_keyboard_has_personal_buttons(self):
+        from vinted.telegram import Telegram as T
+        kb = json.loads(T.deal_keyboard({"model": "13 Pro", "url": "https://x", "seller_id": "99"}))
+        rows = kb["inline_keyboard"]
+        self.assertEqual(rows[0][0]["url"], "https://x")
+        self.assertEqual([b["callback_data"] for b in rows[1]], ["w|13 Pro", "h|99"])
 
 
 if __name__ == "__main__":
