@@ -4,8 +4,8 @@
 import json
 import os
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-CHAT_ID = os.environ.get("CHAT_ID", "")
+BOT_TOKEN = os.environ.get("BOT", "")
+CHAT_ID = os.environ.get("TEL", "")
 
 CONFIG_FILE = "config.json"
 SEEN_FILE = "seen.json"
