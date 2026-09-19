@@ -27,8 +27,20 @@ class Run:
         self.tg = telegram
         self.sleep = sleep
         self.totals = {}
+        self.catalog_ids = {}
+        self.brand_ids = {}
         self.examples = []
         self.alerts = []
+
+    @staticmethod
+    def _count_id(item, kind, store):
+        val = item.get(f"{kind}_id")
+        if val is None:
+            nested = item.get(kind)
+            if isinstance(nested, dict):
+                val = nested.get("id")
+        if val is not None:
+            store[val] = store.get(val, 0) + 1
 
     def reject(self, reason, example=None):
         self.totals[reason] = self.totals.get(reason, 0) + 1
@@ -64,6 +76,9 @@ class Run:
             drop_from = prev
 
         model = detect_model(title)
+        if model:            # renkam ID tik tikriems telefonams – pagal juos nustatysim filtra
+            self._count_id(item, "catalog", self.catalog_ids)
+            self._count_id(item, "brand", self.brand_ids)
         if not model or is_accessory(title) or price is None:
             self.new_count += 0 if drop_from else 1
             self.new_seen[iid] = time.time()
@@ -255,6 +270,7 @@ class Run:
             self.check_sold()
 
         self.print_market()
+        self.print_ids()
         summary = ", ".join(f"{k}: {n}" for k, n in sorted(self.totals.items(), key=lambda kv: -kv[1]))
         print(f"IS VISO: gauta {fetched}, tinkama {len(self.alerts)}. Atmesta – {summary}")
         self.heartbeat(fetched, summary)
@@ -277,6 +293,15 @@ class Run:
         save_seen(self.new_seen)
 
         print(f"Issiusta {len(self.alerts)} alert'u." if self.alerts else "Nauju deal'u nera.")
+
+    def print_ids(self):
+        """Padeda uzpildyti CATALOG_IDS / BRAND_IDS config.json faile."""
+        for name, store, key in (("kategorijos", self.catalog_ids, "CATALOG_IDS"),
+                                 ("prekes zenklai", self.brand_ids, "BRAND_IDS")):
+            top = sorted(store.items(), key=lambda kv: -kv[1])[:5]
+            if top:
+                pairs = ", ".join(f"{i} ({n} telef.)" for i, n in top)
+                print(f"Daznos {name}: {pairs}   -> config.json \"{key}\": [{top[0][0]}]")
 
     def print_market(self):
         manual = config.market_prices()
