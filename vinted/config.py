@@ -49,7 +49,10 @@ DEFAULTS = {
     "SOLD_CHECK_AFTER_DAYS": 2,      # tikrinti skelbimus, kuriu kataloge nematem bent tiek dienu
     "MIN_SAMPLES": 8,                # kiek prasomu kainu reikia rinkos kainai
     "USE_TYPICAL_FALLBACK": True,    # kai duomenu per mazai – naudoti apytiksle kaina (retiems modeliams)
-    "MARKET_PERCENTILE": 0.5,        # prasomu kainu percentilis (0.5 = mediana, 0.35 = pigesnis trecdalis)
+    "MARKET_PERCENTILE": 0.4,        # prasomu kainu percentilis (0.5 = mediana, 0.35 = pigesnis trecdalis)
+    "ASKING_MAX_AGE_DAYS": 21,       # skelbimai, kabantys ilgiau – per brangus, i rinkos kaina neiskaiciuojami
+    "ASKING_SALE_FACTOR": 0.85,      # prasoma kaina -> reali pardavimo kaina (Vinted deramasi / kabo)
+    "GONE_AS_SOLD": True,            # dinges skelbimas laikomas parduotu (Vinted pardave dazniausiai istrina)
     "PRICE_HISTORY_DAYS": 30,
     "SOLD_HISTORY_DAYS": 60,
     "PRICE_HISTORY_MAX_ITEMS": 12000,
@@ -67,6 +70,9 @@ DEFAULTS = {
     # --- Pranesimai ---
     "LOUD_DISCOUNT": 0.30,           # nuo tiek pigiau – su garsu, maziau – tyliai
     "TELEGRAM_COMMANDS": True,       # leisti keisti nustatymus komandomis Telegram'e
+    # Kas gali keisti nustatymus. Tuscia = niekas (komandos grupeje ignoruojamos).
+    # Savo ID suzinosi parases botui privaciai /start.
+    "ADMIN_IDS": [],
     "HEARTBEAT_HOURS": 24,
     "FAIL_ALERT_RUNS": 3,            # po kiek nesekmingu paleidimu is eiles pranesti apie problema
 
@@ -92,6 +98,7 @@ DEFAULTS = {
     # ID suzinosi is log'o eilutes "Daznos kategorijos/brandai" po paleidimo.
     "CATALOG_IDS": [],               # pvz. [2342] – mobilieji telefonai
     "BRAND_IDS": [],                 # pvz. [12] – Apple
+    "MAX_RUN_MINUTES": 25,           # ilgiausias paleidimo laikas – po to sustoja ir tesia kitame
     "ROTATE_QUERIES": True,          # kiekviena paleidima pradeti nuo kito modelio (tolygesnis greitis)
     "PAGES": 2,                      # puslapiu (po 96 skelb.) kiekvienai paieskai iprastai
     "FULL_SCAN_PAGES": 10,           # kai seen.json tuscias (pirmas/pilnas paleidimas) – perziureti daugiau

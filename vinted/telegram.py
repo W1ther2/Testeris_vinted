@@ -92,11 +92,8 @@ class Telegram:
     def deal_keyboard(deal):
         """Mygtukai po kortele. Antros eiles mygtukai veikia kiekvienam vartotojui
         atskirai (Telegram pasako, kas paspaude, o botas atsako tik jam)."""
-        seller_id = (deal.get("seller") or {}).get("id") or deal.get("seller_id") or ""
         rows = [[{"text": "🛒 Atidaryti Vinted", "url": deal["url"]}],
                 [{"text": "🔔 Sekti šį modelį", "callback_data": f"w|{deal['model']}"[:64]}]]
-        if seller_id:
-            rows[1].append({"text": "🙈 Slėpti pardavėją", "callback_data": f"h|{seller_id}"[:64]})
         return json.dumps({"inline_keyboard": rows})
 
     def send_deal(self, deal, silent=False, chat_id=None):
