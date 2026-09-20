@@ -1,1 +1,1 @@
-"""Testai: python -m unittest discover tests"""
+"""Vinted iPhone deal finder – paketas."""
