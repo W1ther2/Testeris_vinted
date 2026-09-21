@@ -50,7 +50,11 @@ def format_card(d):
     if d.get("defects"):
         lines.append(f"⚠️ <b>Defektai:</b> {html.escape(', '.join(d['defects']))}")
     lines.append(f"📦 <b>Būklė:</b> {html.escape(d.get('condition') or 'nenurodyta')}")
-    lines.append(f"🔋 <b>Baterija:</b> {str(d['battery']) + '%' if d.get('battery') else 'nenurodyta'}")
+    if d.get("battery"):
+        low = " ⚠️ žema, bet kaina gera" if d.get("battery_low") else ""
+        lines.append(f"🔋 <b>Baterija:</b> {d['battery']}%{low}")
+    else:
+        lines.append("🔋 <b>Baterija:</b> nenurodyta")
     s = d.get("seller") or {}
     if s.get("rating") is not None and s.get("reviews") is not None:
         extra = f", pardavė {s['sold']}" if s.get("sold") is not None else ""
@@ -59,7 +63,13 @@ def format_card(d):
     if s.get("country"):
         place = COUNTRY_LT.get(s["country"], s["country"]) + (f", {s['city']}" if s.get("city") else "")
         lines.append(f"📍 <b>Vieta:</b> {html.escape(place)}")
-    lines.append(f'🔗 <a href="{html.escape(d["url"])}">Atidaryti Vinted</a>')
+    where = d.get("source_label") or "Vinted"
+    if d.get("age"):
+        extra = f" · {where}" if len(config.cfg["SOURCES"]) > 1 else ""
+        lines.append(f"⏱ <b>Įkelta:</b> {d['age']}{html.escape(extra)}")
+    elif len(config.cfg["SOURCES"]) > 1:
+        lines.append(f"🛍 <b>Šaltinis:</b> {html.escape(where)}")
+    lines.append(f'🔗 <a href="{html.escape(d["url"])}">Atidaryti {html.escape(where)}</a>')
     return "\n".join(lines)[:1024]
 
 
@@ -92,7 +102,7 @@ class Telegram:
     def deal_keyboard(deal):
         """Mygtukai po kortele. Antros eiles mygtukai veikia kiekvienam vartotojui
         atskirai (Telegram pasako, kas paspaude, o botas atsako tik jam)."""
-        rows = [[{"text": "🛒 Atidaryti Vinted", "url": deal["url"]}],
+        rows = [[{"text": f"🛒 Atidaryti {deal.get('source_label') or 'Vinted'}", "url": deal["url"]}],
                 [{"text": "🔔 Sekti šį modelį", "callback_data": f"w|{deal['model']}"[:64]}]]
         return json.dumps({"inline_keyboard": rows})
 

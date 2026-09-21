@@ -9,6 +9,12 @@ from . import config
 from .market import Market, migrate_old_prices
 
 
+def seen_key(key):
+    """Seni irasai ('123') -> 'vinted:123'. Fingerprintai ('fp:...') nekeiciami."""
+    k = str(key)
+    return k if ":" in k or k.startswith("__") else "vinted:" + k
+
+
 def load_seen(path=None):
     path = path or config.SEEN_FILE
     try:
@@ -22,14 +28,14 @@ def load_seen(path=None):
         return {}
     now = time.time()
     if isinstance(data, list):
-        return {str(x): now for x in data}
+        return {seen_key(x): now for x in data}
     out = {}
     if isinstance(data, dict):
         for k, v in data.items():
             try:
-                out[str(k)] = float(v)
+                out[seen_key(k)] = float(v)
             except (TypeError, ValueError):
-                out[str(k)] = now
+                out[seen_key(k)] = now
     return out
 
 

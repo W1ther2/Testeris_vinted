@@ -18,6 +18,11 @@ BASE = "https://www.vinted.lt"
 API_BASE = "https://api.vinted.lt"
 
 DEFAULTS = {
+    # --- Is kur ieskoti ---
+    # Saltiniai ta tvarka, kuria tikrinami. Galimi: "vinted".
+    # Naujas saltinis = vienas failas vinted/sources/ + jo vardas cia.
+    "SOURCES": ["vinted"],
+
     # --- Ka ieskoti ---
     "SEARCH_QUERIES": [
         "iPhone 8", "iPhone 8 Plus", "iPhone X", "iPhone XR", "iPhone XS", "iPhone XS Max",
@@ -33,7 +38,9 @@ DEFAULTS = {
     "MIN_DISCOUNT": 0.10,            # bent 10% pigiau nei telefono verte
     "HARD_MIN_PRICE_RATIO": 0.40,    # pigiau nei 40% rinkos – beveik visada sugedes/dalims/ne telefonas, atmetama
     "SUSPICIOUS_PRICE_RATIO": 0.55,  # pigiau nei 55% rinkos – siunciama, bet pazymima rizika
-    "MIN_BATTERY": 0,                # min. baterijos % (0 = netikrinti)
+    # Baterija: nurodyta ir per maza -> atmetama; nenurodyta -> praleidziama su zyma kortelėje.
+    "MIN_BATTERY": 80,               # min. baterijos % (0 = netikrinti)
+    "LOW_BATTERY_MIN_DISCOUNT": 0.30,  # isimtis: labai pigus telefonas praleidziamas ir su mazesne baterija
     "MODEL_MIN_PRICES": {},          # savos min. kainos modeliams, pvz. {"13": 100} (kitiems – numatytosios)
 
     # --- Tik tvarkingi telefonai ---

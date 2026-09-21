@@ -202,7 +202,11 @@ def handle(text, state):
             if not 0 <= v <= 100:
                 raise ValueError
             _set(state, "MIN_BATTERY", v)
-            return "✅ Baterija netikrinama" if v == 0 else f"✅ Min. baterija: {v}%"
+            if v == 0:
+                return "✅ Baterija netikrinama"
+            return (f"✅ Min. baterija: {v}%\n"
+                    f"<i>Nenurodyta baterija praleidžiama (kortelėje – „nenurodyta“), "
+                    f"o mažesnė – tik jei bent {c['LOW_BATTERY_MIN_DISCOUNT']:.0%} pigiau.</i>")
 
         if cmd == "pelnas":
             v = args.lower() not in ("ne", "no", "0", "off", "isjungti", "nerodyti")
@@ -243,6 +247,7 @@ def handle(text, state):
                     f"Rinkos kaina: {c['MARKET_PERCENTILE']:.0%} percentilis\n"
                     f"Su garsu nuo: {c['LOUD_DISCOUNT']:.0%}\n"
                     f"Min. baterija: {c['MIN_BATTERY'] or 'netikrinama'}\n"
+                    f"Šaltiniai: {', '.join(str(s) for s in c['SOURCES'])}\n"
                     f"Tik tvarkingi: {'taip' if c.get('TIDY_ONLY') else 'ne'}\n"
                     f"Rodyti pelną: {'taip' if c.get('SHOW_PROFIT') else 'ne'}\n"
                     f"Pauzė: {'taip' if c.get('PAUSED') else 'ne'}\n"

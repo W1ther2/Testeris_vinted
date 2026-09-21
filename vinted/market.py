@@ -12,8 +12,6 @@ from dataclasses import dataclass
 
 from . import config
 from .phone import detect_model, extract_storage, is_accessory, find_defects, condition_ok, min_price, typical_price
-from .parsing import get_condition
-from .parsing import get_price
 from .util import today, median, percentile
 
 
@@ -33,33 +31,37 @@ class Quote:
     by_storage: bool
 
 
+def with_source(key):
+    """Seni irasai buvo raktais be saltinio ('123') – dabar visi 'vinted:123'."""
+    return key if ":" in key else "vinted:" + key
+
+
 class Market:
     def __init__(self, data=None):
         data = data or {}
-        self.items = data.get("items", {}) if isinstance(data, dict) else {}
+        items = data.get("items", {}) if isinstance(data, dict) else {}
+        self.items = {with_source(str(k)): v for k, v in items.items()}
 
     def to_dict(self):
         return {"items": self.items}
 
     # --- stebejimas -------------------------------------------------------
-    def observe(self, items, day=None):
-        """Uzraso kataloge matytu telefonu kainas. Grazina {id: ankstesne_kaina}
+    def observe(self, listings, day=None):
+        """Uzraso kataloge matytu telefonu kainas. Grazina {uid: ankstesne_kaina}
         tiems, kurie atpigo."""
         day = day if day is not None else today()
         drops = {}
-        for it in items:
-            if not isinstance(it, dict) or not it.get("id"):
-                continue
-            title = it.get("title") or ""
+        for l in listings:
+            title = l.title or ""
             model = detect_model(title)
-            price = get_price(it)
+            price = l.price
             if not model or price is None or is_accessory(title) or find_defects(title):
                 continue
             if price < max(40, min_price(model)):          # dezutes, dalys, sugede – ne rinkos kaina
                 continue
-            if not condition_ok(get_condition(it), "Gera"):   # patenkinamos bukles – ne rinkos kaina
+            if not condition_ok(l.condition, "Gera"):      # patenkinamos bukles – ne rinkos kaina
                 continue
-            iid = str(it["id"])
+            iid = l.uid
             e = self.items.get(iid)
             if e is None:
                 self.items[iid] = {"m": model, "s": extract_storage(title) or "", "p": round(price, 2),
@@ -77,16 +79,16 @@ class Market:
         return drops
 
     def get(self, item_id):
-        return self.items.get(str(item_id))
+        return self.items.get(with_source(str(item_id)))
 
     def mark_alerted(self, item_id, price):
-        e = self.items.get(str(item_id))
+        e = self.items.get(with_source(str(item_id)))
         if e is not None:
             e["a"] = round(price, 2)
 
     def already_alerted_at(self, item_id, price):
         """True, jei apie si skelbima jau pranesta uz panasia ar mazesne kaina."""
-        e = self.items.get(str(item_id))
+        e = self.items.get(with_source(str(item_id)))
         if not e or not e.get("a"):
             return False
         return price >= e["a"] * (1 - config.cfg["PRICE_DROP_MIN"])
@@ -103,7 +105,7 @@ class Market:
 
     def set_status(self, item_id, status, day=None):
         day = day if day is not None else today()
-        e = self.items.get(str(item_id))
+        e = self.items.get(with_source(str(item_id)))
         if e is None:
             return
         e["c"] = day
@@ -218,6 +220,7 @@ def migrate_old_prices(old):
                 price, day = float(v[0]), int(v[1])
             except (TypeError, ValueError, IndexError):
                 continue
+            iid = with_source(str(iid))
             e = m.items.get(iid)
             if e is None:
                 m.items[iid] = {"m": model, "s": "" if storage == "*" else storage, "p": price,
