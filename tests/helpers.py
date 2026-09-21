@@ -36,3 +36,15 @@ def item(iid, title, price, user_id=1, status="Labai gera", **extra):
          "url": f"/items/{iid}", "user": {"id": user_id}, "status": status}
     d.update(extra)
     return d
+
+
+def listing(*args, **kwargs):
+    """Vinted katalogo irasas -> bendras `Listing` (toks, koki mato visa logika)."""
+    from vinted.sources.vinted_source import VintedSource
+    return VintedSource(client=object()).to_listing(item(*args, **kwargs))
+
+
+def listings(*items):
+    from vinted.sources.vinted_source import VintedSource
+    source = VintedSource(client=object())
+    return [source.to_listing(i) for i in items]
