@@ -25,6 +25,10 @@ DEFAULTS = {
     # Saltiniai tikrinami vienu metu (jie eina i skirtingus serverius, tad vienas kito
     # nestabdo). false = paeiliui, tada laikas dalijamas po lygiai.
     "PARALLEL_SOURCES": True,
+    # Skelbiu: narsyti visa Apple kategorija vienu sarasu, o ne ieskoti kiekvieno modelio
+    # atskirai. Greiciau ir randa daugiau (skelbimu pavadinimai ne visada sutampa su
+    # raktazodziu). false = naudoti SEARCH_QUERIES kaip Vinted.
+    "SKELBIU_BROWSE_ALL": True,
 
     # --- Ka ieskoti ---
     "SEARCH_QUERIES": [
@@ -95,6 +99,7 @@ DEFAULTS = {
     "ADMIN_IDS": [],
     "HEARTBEAT_HOURS": 24,
     "FAIL_ALERT_RUNS": 3,            # po kiek nesekmingu paleidimu is eiles pranesti apie problema
+    "SOURCE_ALERT_HOURS": 12,        # kaip daznai pranesti apie blokuojama saltini (0 = kas karta)
 
     # --- Priedu atpazinimas (pirmas pavadinimo zodis) ---
     "ACCESSORY_FIRST_WORDS": [

@@ -71,6 +71,8 @@ class State:
         # {vartotojo_id: {"chat": privataus pokalbio id, "name": vardas,
         #                 "watch": [modeliai], "hide": [pardaveju id]}}
         self.users = data.get("users") or {}
+        # {saltinio vardas: kada paskutini karta pranesta apie blokavima}
+        self.source_alerts = data.get("source_alerts") or {}
 
     @classmethod
     def load(cls, path=None, old_prices_path=None, seen=None):
@@ -117,6 +119,6 @@ class State:
                 "telegram_offset": self.telegram_offset,
                 "overrides": self.overrides, "heartbeat": self.heartbeat, "last_run": self.last_run,
                 "fail_streak": self.fail_streak, "query_offset": self.query_offset,
-                "users": self.users}
+                "users": self.users, "source_alerts": self.source_alerts}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))

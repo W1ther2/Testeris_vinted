@@ -274,20 +274,27 @@ class Run:
         c = config.cfg
         fetched = 0
         source.start()
+        if source.unavailable:
+            print(f"! [{source.label}] siame paleidime nepasiekiamas: {source.unavailable}")
+            return 0
         pages = max(1, int(pages * getattr(source, "pages_multiplier", 1)))
         queries = self.rotated(source.queries())
-        if c["ROTATE_QUERIES"] and queries:
-            print(f"[{source.label}] pradedama nuo: '{queries[0]}'")
+        if c["ROTATE_QUERIES"] and len(queries) > 1:
+            print(f"[{source.label}] pradedama nuo: {source.describe(queries[0])}")
         for q in queries:
             if self.out_of_time():
                 print(f"! Pasiektas laiko limitas ({c['MAX_RUN_MINUTES']} min.) – "
                       "likusius modelius tikrinsiu kitame paleidime.")
                 break
+            if source.unavailable:
+                print(f"! [{source.label}] nebepasiekiamas ({source.unavailable}) – "
+                      "baigiu si saltini, tesim kitame paleidime.")
+                break
             if source.blocked_queries >= c["STOP_AFTER_BLOCKED_QUERIES"]:
                 print(f"! {source.label} blokuoja uzklausas ({source.blocked_queries} paieskos is eiles) – "
                       "baigiu si saltini, tesim kitame paleidime.")
                 break
-            print(f"Tikrinama [{source.label}]: '{q}'...")
+            print(f"Tikrinama [{source.label}]: {source.describe(q)}...")
             listings = source.search(q, pages, seen)
             self.last_error = source.last_error or self.last_error
             fetched += len(listings)
@@ -389,6 +396,7 @@ class Run:
         if c["USE_SOLD_PRICES"]:
             self.check_sold()
 
+        self.report_blocked_sources()
         self.calibrate()
         self.print_market()
         summary = ", ".join(f"{k}: {n}" for k, n in sorted(self.totals.items(), key=lambda kv: -kv[1]))
@@ -413,6 +421,28 @@ class Run:
         save_seen(self.new_seen)
 
         print(f"Issiusta {len(self.alerts)} alert'u." if self.alerts else "Nauju deal'u nera.")
+
+    def report_blocked_sources(self):
+        """Kai vienas saltinis blokuojamas, o kitas veikia, bendras skaicius atrodo
+        normaliai ir problema lieka nepastebeta. Todel pranesam atskirai – bet ne
+        kas paleidima, kitaip Telegram uzsikimstu."""
+        blocked = [s for s in self.sources if s.unavailable]
+        if not blocked:
+            return
+        print("! Nepasiekiami saltiniai: "
+              + ", ".join(f"{s.label} ({s.unavailable})" for s in blocked))
+        hours = config.cfg["SOURCE_ALERT_HOURS"]
+        now = time.time()
+        for source in blocked:
+            last = float(self.state.source_alerts.get(source.name) or 0)
+            if hours > 0 and now - last < hours * 3600:
+                continue
+            self.state.source_alerts[source.name] = now
+            self.tg.send_message(
+                f"⚠️ <b>{html.escape(source.label)} nepasiekiamas</b>\n"
+                f"Priežastis: {html.escape(source.unavailable)}\n"
+                f"Kiti šaltiniai veikia toliau. Jei kartojasi – gali reikėti paleisti "
+                f"iš kito IP (ne GitHub serverio).", silent=True)
 
     def calibrate(self):
         """Palygina, kiek spejom, su tuo, kiek realiai gauta uz parduotus telefonus."""
