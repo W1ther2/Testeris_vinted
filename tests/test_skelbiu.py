@@ -225,7 +225,76 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(why_blocked("<title>Attention Required! | Cloudflare</title>"),
                          "Cloudflare apsauga")
         self.assertEqual(why_blocked("Just a moment... Ray ID: abc"), "Cloudflare apsauga")
+        self.assertEqual(why_blocked("", {"CF-RAY": "abc123"}), "Cloudflare apsauga")
         self.assertEqual(why_blocked("Too many requests"), "uzklausu ribojimas")
+
+    def test_unknown_block_is_not_guessed(self):
+        """Nezinia nevadinam „uzklausu ribojimu“ – tai butu klaidinga diagnoze."""
+        from vinted.sources.skelbiu import why_blocked
+        self.assertEqual(why_blocked("Forbidden"), "neaiski priezastis")
+        self.assertEqual(why_blocked("Forbidden", {"Server": "nginx"}),
+                         "neaiski priezastis (serveris: nginx)")
+
+    def test_block_details_shows_what_answered(self):
+        from vinted.sources.skelbiu import block_details
+        r = type("R", (), {})()
+        r.headers = {"Server": "nginx", "CF-RAY": "8ab", "Set-Cookie": "x=1"}
+        r.text = "  Forbidden\n\n  by policy "
+        details = block_details(r)
+        self.assertIn("nginx", details)
+        self.assertIn("8ab", details)
+        self.assertIn("Forbidden by policy", details)
+        self.assertNotIn("Set-Cookie", details)          # slaptu dalyku i log'a nededam
+
+    def test_tries_several_browser_signatures(self):
+        """„chrome“ gali rodyti i sena versija – bandom kelis parasus is eiles."""
+        from vinted.sources import skelbiu as mod
+        made = []
+
+        class Session:
+            def __init__(self, profile): self.profile = profile
+            def get(self, url, headers=None, timeout=None):
+                r = type("R", (), {})()
+                ok = self.profile == "chrome124"
+                r.status_code = 200 if ok else 403
+                r.text, r.headers = ("<html>gerai</html>" if ok else "Forbidden"), {}
+                return r
+
+        client = mod.SkelbiuClient(sleep=lambda s: None)
+        original, mod.USING_CFFI = mod.USING_CFFI, True
+        client._new_session = lambda p: (made.append(p), Session(p))[1]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                client.start()
+        finally:
+            mod.USING_CFFI = original
+        self.assertEqual(client.profile, "chrome124")
+        self.assertFalse(client.blocked)
+        self.assertEqual(made[:3], ["chrome", "chrome131", "chrome124"])
+        self.assertIn("parasas: chrome124", out.getvalue())
+
+    def test_reports_details_when_all_signatures_rejected(self):
+        from vinted.sources import skelbiu as mod
+
+        class Session:
+            def __init__(self, profile): pass
+            def get(self, url, headers=None, timeout=None):
+                r = type("R", (), {})()
+                r.status_code, r.text, r.headers = 403, "Forbidden", {"Server": "nginx"}
+                return r
+
+        client = mod.SkelbiuClient(sleep=lambda s: None)
+        original, mod.USING_CFFI = mod.USING_CFFI, True
+        client._new_session = Session
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                client.start()
+        finally:
+            mod.USING_CFFI = original
+        log = out.getvalue()
+        self.assertEqual(client.blocked, "neaiski priezastis (serveris: nginx)")
+        self.assertIn("Skelbiu atsakymas:", log)
+        self.assertIn("nginx", log)
 
     def test_block_from_first_request_stops_immediately(self):
         """Blokas nuo pirmos uzklausos = mus neileidzia. Laukti 30+60+120s beprasmiska."""
