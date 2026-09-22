@@ -22,6 +22,9 @@ DEFAULTS = {
     # Saltiniai ta tvarka, kuria tikrinami. Galimi: "vinted".
     # Naujas saltinis = vienas failas vinted/sources/ + jo vardas cia.
     "SOURCES": ["vinted"],
+    # Saltiniai tikrinami vienu metu (jie eina i skirtingus serverius, tad vienas kito
+    # nestabdo). false = paeiliui, tada laikas dalijamas po lygiai.
+    "PARALLEL_SOURCES": True,
 
     # --- Ka ieskoti ---
     "SEARCH_QUERIES": [
@@ -59,6 +62,16 @@ DEFAULTS = {
     "MARKET_PERCENTILE": 0.4,        # prasomu kainu percentilis (0.5 = mediana, 0.35 = pigesnis trecdalis)
     "ASKING_MAX_AGE_DAYS": 21,       # skelbimai, kabantys ilgiau – per brangus, i rinkos kaina neiskaiciuojami
     "ASKING_SALE_FACTOR": 0.85,      # prasoma kaina -> reali pardavimo kaina (Vinted deramasi / kabo)
+
+    # --- Savikalibracija ---
+    # Kodas isimena, kiek spejo uz kiekviena telefona, ir kai tas telefonas parduodamas,
+    # palygina su realia kaina. Sistemine paklaida automatiskai istaisoma.
+    "AUTO_CALIBRATE": True,
+    "MIN_CALIBRATION_SAMPLES": 20,   # kiek parduotu reikia, kad pataisymas butu daromas
+    "CALIBRATION_MAX_STEP": 0.05,    # daugiausiai 5% pokytis per paleidima (be soliu)
+    "CALIBRATION_MIN": 0.70,         # ribos, kad klaidingi duomenys nenuvestu i absurda
+    "CALIBRATION_MAX": 1.15,
+
     "GONE_AS_SOLD": True,            # dinges skelbimas laikomas parduotu (Vinted pardave dazniausiai istrina)
     "PRICE_HISTORY_DAYS": 30,
     "SOLD_HISTORY_DAYS": 60,
@@ -150,7 +163,7 @@ def load(path=CONFIG_FILE):
 
 # Raktai, kuriuos galima keisti Telegram komandomis
 OVERRIDABLE = {"MIN_DISCOUNT", "MIN_BATTERY", "LOUD_DISCOUNT", "MARKET_PRICES", "PAUSED", "TIDY_ONLY",
-               "MARKET_PERCENTILE", "SHOW_PROFIT"}
+               "MARKET_PERCENTILE", "SHOW_PROFIT", "AUTO_CALIBRATE"}
 
 
 def apply_overrides(overrides):

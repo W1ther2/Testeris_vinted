@@ -19,6 +19,8 @@ HELP = """<b>Komandos</b>
 /tvarkingi taip|ne – tik tvarkingi telefonai
 /pauze – nesiųsti skelbimų, /testi – vėl siųsti
 /statistika – kodėl atmesti skelbimai (paskutinis paleidimas)
+/tikslumas – kiek vertinimas atitinka realias pardavimo kainas
+/kalibruoti taip|ne – ar taisyti vertinimą automatiškai
 /nustatymai – dabartiniai nustatymai
 <i>Komandos įvykdomos kito paleidimo metu.</i>"""
 
@@ -79,6 +81,34 @@ def _stats_text(state):
     for reason, n in totals[:10]:
         tip = next((v for k, v in TIPS.items() if reason.startswith(k)), "")
         lines.append(f"• {reason}: <b>{n}</b>" + (f"\n   <i>{tip}</i>" if tip else ""))
+    return "\n".join(lines)
+
+
+def _accuracy_text(state):
+    """Kiek musu vertinimas atitiko realias pardavimo kainas."""
+    c = config.cfg
+    acc = state.market.accuracy()
+    cal = state.market.calibration
+    if not acc["n"]:
+        return ("Tikslumo duomenų dar nėra.\n<i>Jie kaupiasi, kai stebimas telefonas "
+                "parduodamas – tada palyginam, kiek spėjom ir kiek realiai gauta.</i>")
+    bias = 1 - acc["ratio"]
+    word = "pervertiname" if bias > 0 else "nuvertiname"
+    how = "patvirtinti pardavimai" if acc["confirmed"] else "dingę skelbimai (spėjama, kad parduoti)"
+    lines = [f"<b>Vertinimo tikslumas</b> ({acc['n']} parduoti – {how})",
+             f"Vidutiniškai <b>{word} {abs(bias):.0%}</b>",
+             f"Dabartinis pataisymas: <b>x{cal:.3f}</b>"
+             f"{' (savikalibracija išjungta)' if not c['AUTO_CALIBRATE'] else ''}", ""]
+    for model, n, ratio in acc["rows"][:12]:
+        mark = "✅" if abs(1 - ratio) < 0.08 else "⚠️"
+        lines.append(f"{mark} iPhone {model}: realiai {ratio:.0%} mūsų vertinimo ({n} parduoti)")
+    truksta = c["MIN_CALIBRATION_SAMPLES"] - acc["n_target"]
+    if truksta > 0:
+        lines.append(f"\n<i>Automatiniam pataisymui reikia {c['MIN_CALIBRATION_SAMPLES']} parduotų – "
+                     f"dar trūksta {truksta}.</i>")
+    elif acc["target"]:
+        lines.append(f"\n<i>Teisingas būtų pataisymas x{acc['target'] / c['ASKING_SALE_FACTOR']:.3f}; "
+                     f"prie jo einama po {c['CALIBRATION_MAX_STEP']:.0%} per paleidimą.</i>")
     return "\n".join(lines)
 
 
@@ -187,6 +217,16 @@ def handle(text, state):
         if cmd in ("statistika", "stats"):
             return _stats_text(state)
 
+        if cmd in ("tikslumas", "tikslumą"):
+            return _accuracy_text(state)
+
+        if cmd in ("kalibruoti", "kalibravimas"):
+            v = args.lower() not in ("ne", "no", "0", "off", "isjungti")
+            _set(state, "AUTO_CALIBRATE", v)
+            return ("✅ Vertinimas bus automatiškai taisomas pagal realius pardavimus"
+                    if v else f"✅ Savikalibracija išjungta (pataisymas lieka "
+                              f"x{state.market.calibration:.3f})")
+
         if cmd == "kainos":
             return _prices_text(state)
 
@@ -248,6 +288,8 @@ def handle(text, state):
                     f"Su garsu nuo: {c['LOUD_DISCOUNT']:.0%}\n"
                     f"Min. baterija: {c['MIN_BATTERY'] or 'netikrinama'}\n"
                     f"Šaltiniai: {', '.join(str(s) for s in c['SOURCES'])}\n"
+                    f"Vertinimo pataisymas: x{state.market.calibration:.3f}"
+                    f"{' (auto)' if c.get('AUTO_CALIBRATE') else ' (rankinis)'}\n"
                     f"Tik tvarkingi: {'taip' if c.get('TIDY_ONLY') else 'ne'}\n"
                     f"Rodyti pelną: {'taip' if c.get('SHOW_PROFIT') else 'ne'}\n"
                     f"Pauzė: {'taip' if c.get('PAUSED') else 'ne'}\n"

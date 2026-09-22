@@ -286,10 +286,14 @@ def estimate_value(market, condition, battery, defects):
     return value
 
 
-def estimate_profit(price, resale_value, pickup_only=False):
-    """Pelnas perpardavus: verte - (kaina + Vinted pirkejo mokestis + siuntimas)."""
+def estimate_profit(price, resale_value, pickup_only=False, buyer_fee=True):
+    """Pelnas perpardavus: verte - (kaina + pirkejo apsaugos mokestis + siuntimas).
+
+    `buyer_fee` – Vinted ima pirkejo apsaugos mokesti, Skelbiu ne (ten atsiskaitoma tiesiogiai)."""
     c = config.cfg
-    cost = price + c["BUYER_FEE_FIXED"] + price * c["BUYER_FEE_PCT"]
+    cost = price
+    if buyer_fee:
+        cost += c["BUYER_FEE_FIXED"] + price * c["BUYER_FEE_PCT"]
     if not pickup_only:
         cost += c["SHIPPING_COST"]
     return resale_value - cost

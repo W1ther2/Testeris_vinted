@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Pagrindine logika: saltiniai -> vertinimas -> Telegram."""
 
+import concurrent.futures
 import hashlib
 import html
+import threading
 import time
 import traceback
 
@@ -30,12 +32,29 @@ class Run:
         self.tg = telegram
         self.sleep = sleep
         self.totals = {}
-        self.examples = []
         self.alerts = []
         self.last_error = ""
+        self.deadline = None        # kada baigti si saltini (kad kitiems liktu laiko)
+        # Saltiniai gali suktis lygiagreciai, todel bendri duomenys (rinkos istorija,
+        # matytu sarasas, Telegram) liecami tik su sia spyna.
+        self.lock = threading.RLock()
+        self._local = threading.local()
+
+    # Atmetimo pavyzdziai renkami atskirai kiekvienam saltiniui – kitaip lygiagreciai
+    # dirbantys saltiniai maisytu vienas kito eilutes.
+    @property
+    def examples(self):
+        if not hasattr(self._local, "examples"):
+            self._local.examples = []
+        return self._local.examples
+
+    @examples.setter
+    def examples(self, value):
+        self._local.examples = value
 
     def reject(self, reason, example=None):
-        self.totals[reason] = self.totals.get(reason, 0) + 1
+        with self.lock:
+            self.totals[reason] = self.totals.get(reason, 0) + 1
         if example and len(self.examples) < 5:
             self.examples.append(f"{reason}: {example}")
 
@@ -60,7 +79,8 @@ class Run:
         if model and hasattr(source, "note_ids"):
             source.note_ids(listing)      # renkam ID tik tikriems telefonams – pagal juos nustatysim filtra
         if not model or is_accessory(title) or price is None:
-            self.new_count += 0 if drop_from else 1
+            with self.lock:
+                self.new_count += 0 if drop_from else 1
             self.new_seen[uid] = time.time()
             return self.reject("ne telefonas / kitas modelis")
 
@@ -72,7 +92,8 @@ class Run:
             return self.reject("per mazai kainu duomenu",
                                f"iPhone {model} ({self.state.market.sample_count(model)} skelb.)")
         if not drop_from:
-            self.new_count += 1
+            with self.lock:
+                self.new_count += 1
         cat_condition = listing.condition
         if c["TIDY_ONLY"] and not condition_ok(cat_condition, c["MIN_CONDITION"]):
             self.new_seen[uid] = time.time()
@@ -146,18 +167,23 @@ class Run:
                 rating < c["MIN_SELLER_RATING"] or reviews < c["MIN_SELLER_REVIEWS"]):
             return self.reject("pardavejas", f"{rating}/5, {reviews} atsil.: {title[:40]}")
 
+        # Tas pats telefonas, is naujo ikeltas kitu skelbimu, atpazistamas pagal pardaveja.
+        # Kai pardavejo nustatyti nepavyksta, imam pati skelbima – tada dublikatu nebus
+        # ieskoma, bet ir skirtingi zmones nebus supainioti tarpusavyje.
+        seller_id = str(seller.get("id") or listing.seller_id or uid)
         fp = "fp:" + hashlib.sha1(
-            f"{listing.seller_id}|{model}|{storage}|{price:.0f}".encode()).hexdigest()[:16]
+            f"{source.name}|{seller_id}|{model}|{storage}|{price:.0f}".encode()).hexdigest()[:16]
         if fp in self.new_seen:
             return self.reject("dublikatai")
 
         risk_level, risk_reasons = assess_risk(detail.title or title, description, price, quote.price,
                                                seller, listing.photo_count)
-        profit = estimate_profit(price, value, pickup_only=PICKUP_LABEL in risk_reasons)
+        profit = estimate_profit(price, value, pickup_only=PICKUP_LABEL in risk_reasons,
+                                 buyer_fee=getattr(source, "buyer_protection_fee", True))
 
         deal = {
             "id": uid, "source": source.name, "source_label": getattr(source, "label", source.name),
-            "model": model, "seller_id": listing.seller_id, "storage": storage, "title": title,
+            "model": model, "seller_id": seller_id, "storage": storage, "title": title,
             "price": price, "url": listing.url, "photo": listing.photo or detail.photo,
             "description": description, "condition": condition, "battery": battery,
             "battery_low": battery_low, "defects": [d for d, _ in defects],
@@ -174,7 +200,9 @@ class Run:
     # --- visas paleidimas --------------------------------------------------------
     def out_of_time(self):
         limit = config.cfg["MAX_RUN_MINUTES"]
-        return limit > 0 and (time.time() - self.started) / 60 >= limit
+        if limit > 0 and (time.time() - self.started) / 60 >= limit:
+            return True
+        return self.deadline is not None and time.time() >= self.deadline
 
     def send_personal(self, deal):
         """Asmenines zinutes tiems, kas paspaude 🔔 ties siuo modeliu."""
@@ -223,7 +251,7 @@ class Run:
             source = by_name.get(source_name)
             if source is None:
                 continue
-            st = source.status(local_id)
+            st = source.status(local_id, (self.state.market.get(uid) or {}).get("u"))
             self.state.market.set_status(uid, st)
             if st in found:
                 found[st] += 1
@@ -246,6 +274,7 @@ class Run:
         c = config.cfg
         fetched = 0
         source.start()
+        pages = max(1, int(pages * getattr(source, "pages_multiplier", 1)))
         queries = self.rotated(source.queries())
         if c["ROTATE_QUERIES"] and queries:
             print(f"[{source.label}] pradedama nuo: '{queries[0]}'")
@@ -270,22 +299,69 @@ class Run:
                 deal = self.evaluate(source, listing, drops)
                 if not deal:
                     continue
-                self.alerts.append(deal)
-                self.state.market.mark_alerted(deal["id"], deal["price"])
-                silent = deal["discount"] < c["LOUD_DISCOUNT"]
-                self.tg.send_deal(deal, silent=silent)
-                self.send_personal(deal)
-                tag = f"atpigo nuo {deal['drop_from']:.0f}, " if deal["drop_from"] else ""
-                print(f"  -> [{source.label}] iPhone {deal['model']} {deal['price']:.0f} EUR "
-                      f"({tag}-{deal['discount']:.0%}{', tyliai' if silent else ''}): {deal['title'][:45]}")
-                save_seen(self.new_seen)
-                self.state.save()
+                # Siuntimas ir irasymas – po vieną: kitaip lygiagretus saltiniai
+                # persidengtu Telegram zinutemis ir pustuciais failais.
+                with self.lock:
+                    self.alerts.append(deal)
+                    self.state.market.mark_alerted(deal["id"], deal["price"])
+                    silent = deal["discount"] < c["LOUD_DISCOUNT"]
+                    self.tg.send_deal(deal, silent=silent)
+                    self.send_personal(deal)
+                    tag = f"atpigo nuo {deal['drop_from']:.0f}, " if deal["drop_from"] else ""
+                    print(f"  -> [{source.label}] iPhone {deal['model']} {deal['price']:.0f} EUR "
+                          f"({tag}-{deal['discount']:.0%}{', tyliai' if silent else ''}): "
+                          f"{deal['title'][:45]}")
+                    save_seen(self.new_seen)
+                    self.state.save()
                 self.sleep(1)
-            print(f"  Gauta: {len(listings)}, tinkama: {len(self.alerts) - sent_before}")
-            for ex in self.examples:
-                print(f"    atmesta – {ex}")
+            with self.lock:
+                print(f"  [{source.label}] gauta: {len(listings)}, "
+                      f"tinkama: {len(self.alerts) - sent_before}")
+                for ex in self.examples:
+                    print(f"    atmesta – {ex}")
             self.sleep(c["SLEEP_SECONDS"])
         source.finish(self)
+        return fetched
+
+    def scan_all(self, seen, pages):
+        """Perziuri visus saltinius. Lygiagreciai (jie eina i skirtingus serverius,
+        tad viens kito nelaukia) arba paeiliui, jei taip nustatyta."""
+        c = config.cfg
+        sources = list(self.sources)
+        if len(sources) < 2:
+            return sum(self.scan(s, seen, pages) for s in sources)
+
+        if c["PARALLEL_SOURCES"]:
+            print(f"Tikrinami lygiagreciai: {', '.join(s.label for s in sources)}")
+            fetched = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
+                futures = {pool.submit(self.scan, s, seen, pages): s for s in sources}
+                for future in concurrent.futures.as_completed(futures):
+                    source = futures[future]
+                    try:
+                        fetched += future.result()
+                    except Exception as e:
+                        # Vieno saltinio gedimas neturi nutraukti kito
+                        self.last_error = f"{source.label}: {e}"
+                        print(f"! {source.label} nutruko: {e}")
+                        print(traceback.format_exc())
+            return fetched
+
+        # Paeiliui: saltiniai dalijasi laiku po lygiai, o ju eiliskumas kas paleidima
+        # keiciasi – kitaip antrasis prie ilgo Vinted patikrinimo niekada neprieitu.
+        shift = self.state.query_offset % len(sources)
+        sources = sources[shift:] + sources[:shift]
+        limit = c["MAX_RUN_MINUTES"]
+        fetched = 0
+        for i, source in enumerate(sources):
+            # Terminas nustatomas pries patikra – kitaip praejes pirmojo saltinio
+            # terminas iskart nutrauktu ir antraji.
+            self.deadline = (self.started + limit * 60 * (i + 1) / len(sources)
+                             if limit > 0 else None)
+            if i and self.out_of_time():
+                break
+            fetched += self.scan(source, seen, pages)
+        self.deadline = None
         return fetched
 
     def run(self):
@@ -303,11 +379,7 @@ class Run:
         if not seen:
             print(f"seen.json tuscias – pilnas perziurejimas ({pages} psl. kiekvienai paieskai)")
 
-        fetched = 0
-        for i, source in enumerate(self.sources):
-            if i and self.out_of_time():
-                break
-            fetched += self.scan(source, seen, pages)
+        fetched = self.scan_all(seen, pages)
 
         queries = config.cfg["SEARCH_QUERIES"]
         if c["ROTATE_QUERIES"] and queries:
@@ -317,6 +389,7 @@ class Run:
         if c["USE_SOLD_PRICES"]:
             self.check_sold()
 
+        self.calibrate()
         self.print_market()
         summary = ", ".join(f"{k}: {n}" for k, n in sorted(self.totals.items(), key=lambda kv: -kv[1]))
         print(f"IS VISO: gauta {fetched}, tinkama {len(self.alerts)}. Atmesta – {summary}")
@@ -341,16 +414,39 @@ class Run:
 
         print(f"Issiusta {len(self.alerts)} alert'u." if self.alerts else "Nauju deal'u nera.")
 
+    def calibrate(self):
+        """Palygina, kiek spejom, su tuo, kiek realiai gauta uz parduotus telefonus."""
+        market = self.state.market
+        acc = market.accuracy()
+        if acc["n"]:
+            how = "patvirtinti pardavimai" if acc["confirmed"] else "dingę skelbimai"
+            bias = 1 - acc["ratio"]
+            word = "pervertinam" if bias > 0 else "nuvertinam"
+            print(f"Vertinimo tikslumas ({acc['n']} parduoti, {how}): "
+                  f"{word} {abs(bias):.0%} (pataisymas dabar x{market.calibration:.3f})")
+            for model, n, ratio in acc["rows"][:8]:
+                print(f"    iPhone {model:<11} {n:>3} parduoti, realiai {ratio:.0%} musu vertinimo")
+        changed = market.calibrate()
+        if changed:
+            print(f"Pataisymas atnaujintas: x{changed['old']:.3f} -> x{changed['new']:.3f} "
+                  f"(taikinys x{changed['wanted']:.3f} pagal {changed['n_target']} parduotus)")
+        elif config.cfg["AUTO_CALIBRATE"]:
+            truksta = config.cfg["MIN_CALIBRATION_SAMPLES"] - acc["n_target"]
+            if truksta > 0:
+                print(f"  (savikalibracijai dar reikia {truksta} parduotu telefonu)")
+
     def print_market(self):
         manual = config.market_prices()
         rows = {m: r for m, *r in self.state.market.summary()}
-        print("Rinkos kainos (rankinė / parduotų mediana / prasomu kainu percentilis):")
+        print("Rinkos kainos (rankinė / parduotų mediana / įvertinta pagal skelbimus):")
         for model in MODEL_ORDER:
             if model not in rows and model not in manual:
                 continue
             a, n, s, ns = rows.get(model, (None, 0, None, 0))
+            used = manual.get(model) or s or a
             print(f"  iPhone {model:<11} rankinė: {manual.get(model, 0):>4.0f}  "
-                  f"parduoti: {s or 0:>4.0f} ({ns})  skelbimai: {a or 0:>4.0f} ({n})")
+                  f"parduoti: {s or 0:>4.0f} ({ns})  įvertinta: {a or 0:>4.0f} ({n})  "
+                  f"-> naudojama: {used or 0:>4.0f}")
 
     def heartbeat(self, fetched, summary):
         hours = config.cfg["HEARTBEAT_HOURS"]

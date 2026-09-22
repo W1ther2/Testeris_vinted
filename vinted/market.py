@@ -8,6 +8,8 @@ Kiekvienas matytas telefonas saugomas state.json:
 Dienos – sveikas skaicius (dienos nuo 1970-01-01).
 """
 
+import functools
+import threading
 from dataclasses import dataclass
 
 from . import config
@@ -36,21 +38,53 @@ def with_source(key):
     return key if ":" in key else "vinted:" + key
 
 
+# Kaip buvo gauta kaina, kuria spejom tam telefonui ji pirma karta pamate.
+# Kalibruojam tik pagal "s" – tik prasomu kainu vertinimas turi sistemine paklaida.
+SOURCE_CODE = {"rankinė": "m", "parduoti": "d", "skelbimai": "s", "apytikslė": "t"}
+
+
+def locked(method):
+    """Metodai, lieciantys bendra skelbimu zodyna, vykdomi po vieną – saltiniai
+    gali suktis lygiagreciai."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Market:
     def __init__(self, data=None):
         data = data or {}
         items = data.get("items", {}) if isinstance(data, dict) else {}
         self.items = {with_source(str(k)): v for k, v in items.items()}
+        # Saltiniai gali suktis lygiagreciai: vienas rasos nauja skelbima, kitas tuo metu
+        # skaiciuoja rinkos kaina. Be spynos Python mestu "dictionary changed size".
+        self.lock = threading.RLock()
+        # Kiek musu vertinimas nukrypsta nuo realiu pardavimu (1.0 = nekoreguojam).
+        try:
+            self.calibration = float(data.get("calibration") or 1.0)
+        except (TypeError, ValueError):
+            self.calibration = 1.0
 
+    @locked
     def to_dict(self):
-        return {"items": self.items}
+        return {"items": self.items, "calibration": self.calibration}
+
+    def sale_factor(self):
+        """Prasoma kaina -> reali pardavimo kaina, patikslinta pagal tikrus pardavimus."""
+        return config.cfg["ASKING_SALE_FACTOR"] * self.calibration
 
     # --- stebejimas -------------------------------------------------------
+    @locked
     def observe(self, listings, day=None):
         """Uzraso kataloge matytu telefonu kainas. Grazina {uid: ankstesne_kaina}
-        tiems, kurie atpigo."""
+        tiems, kurie atpigo.
+
+        Naujam telefonui isaugom ir savo tuometini vertinima ("q") – veliau, kai jis
+        bus parduotas, galesim palyginti, kiek spejom ir kiek gavom is tikruju."""
         day = day if day is not None else today()
-        drops = {}
+        drops, quotes = {}, {}
         for l in listings:
             title = l.title or ""
             model = detect_model(title)
@@ -64,8 +98,24 @@ class Market:
             iid = l.uid
             e = self.items.get(iid)
             if e is None:
-                self.items[iid] = {"m": model, "s": extract_storage(title) or "", "p": round(price, 2),
-                                   "f": day, "l": day, "c": day, "st": "active"}
+                storage = extract_storage(title) or ""
+                entry = {"m": model, "s": storage, "p": round(price, 2),
+                         "f": day, "l": day, "c": day, "st": "active"}
+                if l.source != "vinted":
+                    # Vinted adresa galima atkurti is ID, kitiems saltiniams – ne
+                    entry["u"] = l.url
+                if (model, storage) not in quotes:
+                    quotes[(model, storage)] = self.quote(model, storage or None, day)
+                q = quotes[(model, storage)]
+                if q is not None and q.price > 0:
+                    entry["q"] = round(q.price, 2)               # ka spejom si telefona vertant
+                    entry["qs"] = SOURCE_CODE.get(q.source, "?")
+                    if entry["qs"] == "s":
+                        # Koks pataisymas tuomet galiojo. Be sito nezinotume, kokia buvo
+                        # "zalia" skelbimu kaina, ir kalibruotume nuo jau pataisyto skaiciaus –
+                        # tas pats pardavimas pataisyma nustumtu kelis kartus is eiles.
+                        entry["qf"] = round(self.sale_factor(), 4)
+                self.items[iid] = entry
                 continue
             if price < e["p"] - 0.01:
                 drops[iid] = e["p"]
@@ -78,14 +128,17 @@ class Market:
                 e.pop("sd", None)
         return drops
 
+    @locked
     def get(self, item_id):
         return self.items.get(with_source(str(item_id)))
 
+    @locked
     def mark_alerted(self, item_id, price):
         e = self.items.get(with_source(str(item_id)))
         if e is not None:
             e["a"] = round(price, 2)
 
+    @locked
     def already_alerted_at(self, item_id, price):
         """True, jei apie si skelbima jau pranesta uz panasia ar mazesne kaina."""
         e = self.items.get(with_source(str(item_id)))
@@ -94,6 +147,7 @@ class Market:
         return price >= e["a"] * (1 - config.cfg["PRICE_DROP_MIN"])
 
     # --- pardavimu tikrinimas ---------------------------------------------
+    @locked
     def sold_check_candidates(self, day=None):
         """Aktyvus skelbimai, kuriu kataloge seniai nematem ir siandien netikrinom."""
         day = day if day is not None else today()
@@ -103,6 +157,7 @@ class Market:
         cands.sort()
         return [iid for _, iid in cands[: config.cfg["SOLD_CHECKS_PER_RUN"]]]
 
+    @locked
     def set_status(self, item_id, status, day=None):
         day = day if day is not None else today()
         e = self.items.get(with_source(str(item_id)))
@@ -111,10 +166,14 @@ class Market:
         e["c"] = day
         if status == "sold" or (status == "gone" and config.cfg["GONE_AS_SOLD"]):
             e["st"], e["sd"] = "sold", day
+            # "sv" = ar tikrai parduotas (puslapis taip sako), ar tik dingo (galejo buti istrintas).
+            # Tikslumo skaiciavimui pirmiausia naudojam patvirtintus.
+            e["sv"] = 1 if status == "sold" else 0
         elif status == "gone":
             e["st"] = "gone"
 
     # --- rinkos kaina -------------------------------------------------------
+    @locked
     def quote(self, model, storage, day=None):
         """Rinkos kaina. Pirmenybe: rankine > tikri pardavimai > prasomos kainos."""
         c = config.cfg
@@ -149,7 +208,7 @@ class Market:
             asking = trimmed(values("active", c["PRICE_HISTORY_DAYS"], by_storage, "l",
                                     max_life=c["ASKING_MAX_AGE_DAYS"]))
             if len(asking) >= c["MIN_SAMPLES"]:
-                price = percentile(asking, c["MARKET_PERCENTILE"]) * c["ASKING_SALE_FACTOR"]
+                price = percentile(asking, c["MARKET_PERCENTILE"]) * self.sale_factor()
                 return Quote(price, len(asking), "skelbimai", by_storage)
         # Retiems modeliams (16e, 14 Plus, Air...) skelbimu per mazai – naudojam apytiksle kaina,
         # o jei keli skelbimai jau yra – vidurki tarp ju ir apytiksles kainos.
@@ -158,18 +217,87 @@ class Market:
                                     max_life=c["ASKING_MAX_AGE_DAYS"]))
             guess = typical_price(model)
             if len(asking) >= 3:
-                guess = (guess + percentile(asking, c["MARKET_PERCENTILE"]) * c["ASKING_SALE_FACTOR"]) / 2
+                guess = (guess + percentile(asking, c["MARKET_PERCENTILE"]) * self.sale_factor()) / 2
             return Quote(guess, len(asking), "apytikslė", False)
         return None
 
+    # --- tikslumas ir savikalibracija -----------------------------------------
+    @locked
+    def _accuracy_samples(self, day, confirmed_only):
+        """[(modelis, reali/spejta, koks daugiklis butu buves teisingas)].
+
+        Antrasis skaicius – kiek teko nuleisti musu vertinima; trecias – koks
+        prasoma->parduota daugiklis butu tam telefonui tikes (None seniems irasams)."""
+        c = config.cfg
+        out = []
+        for e in self.items.values():
+            if e.get("st") != "sold" or not e.get("q") or e.get("qs") != "s":
+                continue
+            if day - e.get("sd", day) > c["SOLD_HISTORY_DAYS"]:
+                continue
+            if confirmed_only and not e.get("sv"):
+                continue
+            factor = e["p"] * e["qf"] / e["q"] if e.get("qf") else None
+            out.append((e["m"], e["p"] / e["q"], factor))
+        return out
+
+    @locked
+    def accuracy(self, day=None):
+        """Kiek musu vertinimas atitiko realia pardavimo kaina.
+
+        Grazina {"n", "ratio", "confirmed", "rows", "target", "n_target"}.
+        ratio < 1 = pervertinam (spejam brangiau, nei realiai parduota).
+        target = koks prasoma->parduota daugiklis butu buves teisingas."""
+        day = day if day is not None else today()
+        confirmed = True
+        samples = self._accuracy_samples(day, confirmed_only=True)
+        if len(samples) < config.cfg["MIN_CALIBRATION_SAMPLES"]:
+            # Patvirtintu "parduota" dar per mazai – imam ir tuos, kurie tiesiog dingo.
+            all_samples = self._accuracy_samples(day, confirmed_only=False)
+            if len(all_samples) > len(samples):
+                samples, confirmed = all_samples, False
+        by_model = {}
+        for model, ratio, _ in samples:
+            by_model.setdefault(model, []).append(ratio)
+        rows = sorted(((m, len(v), median(v)) for m, v in by_model.items()), key=lambda r: -r[1])
+        factors = [f for _, _, f in samples if f]
+        return {"n": len(samples), "ratio": median([r for _, r, _ in samples]) if samples else None,
+                "confirmed": confirmed, "rows": rows,
+                "target": median(factors) if factors else None, "n_target": len(factors)}
+
+    @locked
+    def calibrate(self, day=None):
+        """Patikslina vertinima pagal tai, kiek realiai gauta uz parduotus telefonus.
+
+        Skaiciuojam absoliutu taikini – koks prasoma->parduota daugiklis butu buves
+        teisingas parduotiems telefonams – ir prie jo einam ne didesniais nei
+        CALIBRATION_MAX_STEP zingsniais. Taip tas pats pardavimas nestumia pataisymo
+        kelis kartus is eiles (nuo to vertinimas persisverdavo i kita puse).
+        Grazina pakeitimo aprasa arba None, jei duomenu dar per mazai."""
+        c = config.cfg
+        if not c["AUTO_CALIBRATE"]:
+            return None
+        data = self.accuracy(day)
+        if data["n_target"] < c["MIN_CALIBRATION_SAMPLES"] or not data["target"]:
+            return None
+        wanted = data["target"] / c["ASKING_SALE_FACTOR"]      # koks pataisymas butu teisingas
+        step = c["CALIBRATION_MAX_STEP"]
+        target = max(self.calibration * (1 - step), min(self.calibration * (1 + step), wanted))
+        target = max(c["CALIBRATION_MIN"], min(c["CALIBRATION_MAX"], target))
+        old, self.calibration = self.calibration, round(target, 4)
+        return {"old": old, "new": self.calibration, "wanted": round(wanted, 4), **data}
+
+    @locked
     def sample_count(self, model):
         return sum(1 for e in self.items.values() if e["m"] == model and e.get("st") == "active")
 
+    @locked
     def price_check(self, model, storage, price, day=None):
         """Kiek procentu kaina pigesne uz rinkos kaina (naudinga /kaina patikrai)."""
         q = self.quote(model, storage, day)
         return None if not q else (q, 1 - price / q.price)
 
+    @locked
     def summary(self, day=None):
         """[(modelis, prasoma_kaina|None, n_skelb, parduota_kaina|None, n_parduota)]"""
         c = config.cfg
@@ -185,11 +313,12 @@ class Market:
         out = []
         for model, d in by_model.items():
             act, sold = trimmed(d["active"]), trimmed(d["sold"])
-            out.append((model, percentile(act, c["MARKET_PERCENTILE"]) if act else None,
+            out.append((model, percentile(act, c["MARKET_PERCENTILE"]) * self.sale_factor() if act else None,
                         len(act), median(sold) if sold else None, len(sold)))
         return out
 
     # --- valymas --------------------------------------------------------------
+    @locked
     def prune(self, day=None):
         c = config.cfg
         day = day if day is not None else today()

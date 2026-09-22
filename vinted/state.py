@@ -106,6 +106,12 @@ class State:
 
     def save(self, path=None):
         path = path or config.STATE_FILE
+        # Spyna laikoma per visa irasyma: kitas saltinis tuo metu gali rasyti naujus
+        # skelbimus, o json.dump ju zodyno keisti nebegali.
+        with self.market.lock:
+            return self._save(path)
+
+    def _save(self, path):
         self.market.prune()
         data = {"market_version": self.MARKET_VERSION, "market": self.market.to_dict(),
                 "telegram_offset": self.telegram_offset,
