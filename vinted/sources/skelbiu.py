@@ -37,13 +37,31 @@ BASE = "https://www.skelbiu.lt"
 APPLE_CATEGORY = 480
 PER_PAGE = 24            # Skelbiu rodo 24 skelbimus puslapyje (Vinted – 96)
 
-HEADERS = {
+BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "lt-LT,lt;q=0.9,en;q=0.8",
-    "Referer": BASE + "/",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
 }
+
+
+def headers(referer=BASE + "/"):
+    """Kuo panasesnes i tikra narsykle.
+
+    SVARBU: su curl_cffi savo User-Agent NERASOM. curl_cffi imituoja konkrecios
+    Chrome versijos TLS parasa ir pats prideda ta versija atitinkanti User-Agent.
+    Iraseme savaji – parasas sako viena, antraste kita, ir Cloudflare tai mato."""
+    h = dict(BASE_HEADERS)
+    if USING_CFFI:
+        h.pop("User-Agent")
+    if referer:
+        h["Referer"] = referer
+    return h
 
 
 # --- smulkios pagalbines ----------------------------------------------------
@@ -245,6 +263,16 @@ def parse_detail(page, city=None):
 
 
 # --- HTTP -------------------------------------------------------------------
+_CLOUDFLARE_RE = re.compile(
+    r"cloudflare|cf-mitigated|attention required|just a moment|"
+    r"checking your browser|ray id", re.I)
+
+
+def why_blocked(body):
+    """Ar tai apsauga nuo botu (IP blokas), ar paprastas uzklausu ribojimas."""
+    return "Cloudflare apsauga" if _CLOUDFLARE_RE.search(body or "") else "uzklausu ribojimas"
+
+
 class SkelbiuClient:
     """Paprastas puslapiu parsisiuntimas su pakartojimais."""
 
@@ -252,38 +280,67 @@ class SkelbiuClient:
         self.sleep = sleep
         self.session = None
         self.last_error = ""
+        self.blocked = ""       # netuscias = svetaine mus atmete, nebandom toliau
+        self.ok_count = 0       # kiek uzklausu pavyko (skiria "IP blokas" nuo "per greitai")
 
     def start(self):
         self.session = (cffi_requests.Session(impersonate="chrome") if USING_CFFI
                         else requests.Session())
+        klientas = "curl_cffi (Chrome parasas)" if USING_CFFI else "requests (BE Chrome paraso!)"
         try:
-            r = self.session.get(BASE + "/", headers=HEADERS, timeout=20)
-            print(f"Skelbiu sesija pradeta (statusas {r.status_code})")
-            if r.status_code != 200:
+            r = self.session.get(BASE + "/", headers=headers(referer=None), timeout=20)
+            print(f"Skelbiu sesija pradeta (statusas {r.status_code}, {klientas})")
+            if r.status_code in (403, 429):
+                self.blocked = why_blocked(r.text)
+                self.last_error = f"Skelbiu HTTP {r.status_code}: {self.blocked}"
+                print(f"! Skelbiu atmete pati pirma uzklausa – {self.blocked}. "
+                      f"Sio paleidimo metu Skelbiu praleidziu.")
+                debug("Skelbiu 403 atsakymas: " + re.sub(r"\s+", " ", r.text or "")[:300])
+            elif r.status_code != 200:
                 self.last_error = f"Skelbiu pagrindinis puslapis: HTTP {r.status_code}"
+            else:
+                self.ok_count += 1
+            if not USING_CFFI:
+                print("! curl_cffi neidiegtas – Skelbiu tikriausiai blokuos. "
+                      "Workflow faile: pip install requests curl_cffi")
         except Exception as e:
             self.last_error = f"Skelbiu sesija nepavyko: {e}"
             print(f"! {self.last_error}")
 
     def get(self, url, tries=3):
         """(http_statusas, tekstas). Klaidos atveju (0, '')."""
+        if self.blocked:
+            return 0, ""
         if self.session is None:
             self.start()
+            if self.blocked:
+                return 0, ""
         wait = config.cfg["SLEEP_SECONDS"]
         for attempt in range(1, tries + 1):
             try:
-                r = self.session.get(url, headers=HEADERS, timeout=25)
+                r = self.session.get(url, headers=headers(), timeout=25)
                 if r.status_code in (403, 429):
-                    self.last_error = f"Skelbiu HTTP {r.status_code} ({url[:60]})"
-                    pause = config.cfg["BLOCK_BACKOFF_SECONDS"][
-                        min(attempt - 1, len(config.cfg["BLOCK_BACKOFF_SECONDS"]) - 1)]
-                    print(f"  ! Skelbiu {r.status_code} – laukiu {pause}s ({attempt}/{tries})...")
+                    reason = why_blocked(r.text)
+                    self.last_error = f"Skelbiu HTTP {r.status_code} ({reason})"
+                    # Jei dar NE VIENA uzklausa nepavyko, tai ne greitis – mus tiesiog
+                    # neileidzia. Laukti 30+60+120s nera prasmes: sustojam is karto.
+                    if not self.ok_count:
+                        self.blocked = reason
+                        print(f"  ! Skelbiu {r.status_code} nuo pirmos uzklausos ({reason}) – "
+                              "nebeaikvoju laiko, praleidziu Skelbiu siame paleidime.")
+                        debug("Skelbiu atsakymas: " + re.sub(r"\s+", " ", r.text or "")[:300])
+                        return 0, ""
+                    backoff = config.cfg["BLOCK_BACKOFF_SECONDS"]
+                    pause = backoff[min(attempt - 1, len(backoff) - 1)]
+                    print(f"  ! Skelbiu {r.status_code} ({reason}) – laukiu {pause}s "
+                          f"({attempt}/{tries})...")
                     self.sleep(pause)
                     continue
                 if r.status_code >= 500:
                     self.last_error = f"Skelbiu HTTP {r.status_code}"
                     self.sleep(wait * attempt)
                     continue
+                self.ok_count += 1
                 return r.status_code, (r.text or "")
             except Exception as e:
                 self.last_error = f"Skelbiu tinklo klaida: {e}"
@@ -296,7 +353,6 @@ class SkelbiuClient:
 class SkelbiuSource(Source):
     name = "skelbiu"
     label = "Skelbiu"
-    pages_multiplier = 4          # 24 skelb./psl. vs Vinted 96 – kad apimtis butu panasi
     buyer_protection_fee = False  # Skelbiu atsiskaitoma tiesiogiai, mokescio nera
 
     def __init__(self, client=None, sleep=time.sleep):
@@ -304,13 +360,34 @@ class SkelbiuSource(Source):
         self.client = client if client is not None else SkelbiuClient(sleep=sleep)
         self._cities = {}         # skelbimo id -> miestas (is saraso, skelbime jo nera)
 
+    @property
+    def browse_all(self):
+        return bool(config.cfg["SKELBIU_BROWSE_ALL"])
+
+    @property
+    def pages_multiplier(self):
+        # Puslapyje 24 skelbimai (Vinted – 96), tad reikia daugiau puslapiu. Narsant
+        # kategorija uzklausa tik viena, todel galim sau leisti gilintis toliau.
+        return 3 if self.browse_all else 4
+
+    def queries(self):
+        """Kategorija 480 jau yra „Apple telefonai“, tad be raktazodziu vienas sarasas
+        grazina VISUS naujausius iPhone skelbimus. 34 atskiros paieskos ne tik brangios –
+        jos dar ir praleidzia tuos skelbimus, kuriu pavadinimas nesutampa su raktazodziu."""
+        return [""] if self.browse_all else super().queries()
+
+    def describe(self, query):
+        return "visi Apple telefonai" if not query else f"'{query}'"
+
     def start(self):
         self.client.start()
         self.last_error = getattr(self.client, "last_error", "") or ""
+        self.unavailable = getattr(self.client, "blocked", "") or ""
 
     def search_url(self, query, page):
-        params = (f"keywords={requests.utils.quote(query)}&category_id={APPLE_CATEGORY}"
-                  f"&orderBy=1&user_type=0&type=0")
+        params = f"category_id={APPLE_CATEGORY}&orderBy=1&user_type=0&type=0"
+        if query:
+            params = f"keywords={requests.utils.quote(query)}&" + params
         return f"{BASE}/skelbimai/{'' if page <= 1 else page}?{params}"
 
     def search(self, query, pages, seen=None):
@@ -319,6 +396,7 @@ class SkelbiuSource(Source):
         for page in range(1, max(1, pages) + 1):
             status, body = self.client.get(self.search_url(query, page))
             self.last_error = self.client.last_error
+            self.unavailable = getattr(self.client, "blocked", "") or ""
             if status != 200 or not body:
                 if page == 1:
                     self.blocked_queries += 1

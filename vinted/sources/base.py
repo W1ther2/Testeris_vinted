@@ -23,6 +23,7 @@ class Source:
     def __init__(self):
         self.last_error = ""
         self.blocked_queries = 0      # kiek paiesku is eiles saltinis atmete
+        self.unavailable = ""         # netuscia = saltinis siame paleidime nepasiekiamas
 
     # --- gyvavimo ciklas --------------------------------------------------
     def start(self):
@@ -35,6 +36,10 @@ class Source:
     def queries(self):
         """Paieskos frazes. Saltinis gali turėti savo (kitokia rasyba, kategorijos)."""
         return list(config.cfg["SEARCH_QUERIES"])
+
+    def describe(self, query):
+        """Kaip paieska atrodo log'e."""
+        return f"'{query}'"
 
     def search(self, query, pages, seen=None):
         """[Listing, ...] – katalogo puslapiai. `seen` = jau matytu uid rinkinys."""
