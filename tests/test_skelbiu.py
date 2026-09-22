@@ -166,6 +166,143 @@ class SearchTest(unittest.TestCase):
             source.search("iPhone 13", pages=3, seen=seen)
         self.assertEqual(len(http.requested), 1)            # visi matyti – toliau nebeeina
 
+    def test_browse_mode_uses_single_category_listing(self):
+        """Kategorija 480 jau yra „Apple telefonai“ – raktazodziu nereikia."""
+        from vinted import config
+        source = SkelbiuSource(client=FakeHttp({}))
+        config.cfg["SKELBIU_BROWSE_ALL"] = True
+        self.assertEqual(source.queries(), [""])
+        self.assertEqual(source.describe(""), "visi Apple telefonai")
+        url = source.search_url("", 1)
+        self.assertNotIn("keywords", url)
+        self.assertIn("category_id=480", url)
+        self.assertIn("orderBy=1", url)
+        self.assertEqual(source.search_url("", 3),
+                         "https://www.skelbiu.lt/skelbimai/3?category_id=480&orderBy=1"
+                         "&user_type=0&type=0")
+
+    def test_keyword_mode_still_available(self):
+        from vinted import config
+        source = SkelbiuSource(client=FakeHttp({}))
+        config.cfg.update(SKELBIU_BROWSE_ALL=False, SEARCH_QUERIES=["iPhone 13", "iPhone 14"])
+        self.assertEqual(source.queries(), ["iPhone 13", "iPhone 14"])
+        self.assertIn("keywords=iPhone%2013", source.search_url("iPhone 13", 1))
+
+    def test_browse_mode_makes_one_query_not_34(self):
+        from tests.helpers import TempDir
+        from tests.test_flow import FakeTelegram
+        from vinted.finder import Run
+        from vinted import config
+
+        with TempDir():
+            config.cfg.update(SKELBIU_BROWSE_ALL=True, SEARCH_QUERIES=["iPhone %d" % i for i in range(34)],
+                              HEARTBEAT_HOURS=0, SLEEP_SECONDS=0)
+            http = FakeHttp({"skelbimai/": (200, SKELBIU_LIST)})
+            source = SkelbiuSource(client=http)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                Run([source], FakeTelegram(), sleep=lambda s: None).run()
+            log = out.getvalue()
+            self.assertEqual(log.count("Tikrinama [Skelbiu]"), 1, log)
+            self.assertIn("visi Apple telefonai", log)
+            self.assertTrue(all("keywords" not in u for u in http.requested if "?" in u))
+
+    def test_user_agent_not_sent_with_curl_cffi(self):
+        """curl_cffi pats prideda savo TLS parasa atitinkanti User-Agent.
+        Irase savaji, parasas sakytu viena, antraste kita – Cloudflare tai mato."""
+        from vinted.sources import skelbiu as mod
+        original = mod.USING_CFFI
+        try:
+            mod.USING_CFFI = True
+            self.assertNotIn("User-Agent", mod.headers())
+            mod.USING_CFFI = False
+            self.assertIn("User-Agent", mod.headers())
+        finally:
+            mod.USING_CFFI = original
+        self.assertIn("Sec-Fetch-Mode", mod.headers())
+
+    def test_recognises_cloudflare_block(self):
+        from vinted.sources.skelbiu import why_blocked
+        self.assertEqual(why_blocked("<title>Attention Required! | Cloudflare</title>"),
+                         "Cloudflare apsauga")
+        self.assertEqual(why_blocked("Just a moment... Ray ID: abc"), "Cloudflare apsauga")
+        self.assertEqual(why_blocked("Too many requests"), "uzklausu ribojimas")
+
+    def test_block_from_first_request_stops_immediately(self):
+        """Blokas nuo pirmos uzklausos = mus neileidzia. Laukti 30+60+120s beprasmiska."""
+        from vinted.sources.skelbiu import SkelbiuClient
+        slept = []
+        client = SkelbiuClient(sleep=slept.append)
+
+        class FakeResp:
+            status_code = 403
+            text = "<title>Attention Required! | Cloudflare</title>"
+
+        class FakeSession:
+            def __init__(self): self.calls = 0
+            def get(self, url, headers=None, timeout=None):
+                self.calls += 1
+                return FakeResp()
+
+        client.session = FakeSession()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            status, body = client.get("https://www.skelbiu.lt/skelbimai/?x=1")
+        self.assertEqual((status, body), (0, ""))
+        self.assertEqual(client.session.calls, 1)        # nebandoma kelis kartus
+        self.assertEqual(slept, [])                      # ir nelaukiama nei sekundes
+        self.assertEqual(client.blocked, "Cloudflare apsauga")
+        self.assertIn("praleidziu Skelbiu", out.getvalue())
+
+    def test_rate_limit_after_success_does_retry(self):
+        """O jei anksciau pavyko – tai tik greitis, tad verta palaukti ir pakartoti."""
+        from vinted.sources.skelbiu import SkelbiuClient
+        slept = []
+        client = SkelbiuClient(sleep=slept.append)
+        client.ok_count = 5
+
+        class FlakySession:
+            def __init__(self): self.calls = 0
+            def get(self, url, headers=None, timeout=None):
+                self.calls += 1
+                r = type("R", (), {})()
+                r.status_code = 429 if self.calls == 1 else 200
+                r.text = "Too many requests" if self.calls == 1 else "<html>gerai</html>"
+                return r
+
+        client.session = FlakySession()
+        with contextlib.redirect_stdout(io.StringIO()):
+            status, body = client.get("https://www.skelbiu.lt/skelbimai/?x=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(slept), 1)
+        self.assertFalse(client.blocked)
+
+    def test_blocked_source_skipped_and_reported_once(self):
+        from tests.helpers import TempDir
+        from tests.test_flow import FakeClient, FakeTelegram, market_items, item
+        from vinted.sources.vinted_source import VintedSource
+        from vinted.finder import Run
+        from vinted import config
+
+        class BlockedSkelbiu(SkelbiuSource):
+            def start(self):
+                self.unavailable = "Cloudflare apsauga"
+
+        with TempDir():
+            config.cfg.update(SOURCES=["vinted", "skelbiu"], SEARCH_QUERIES=["iPhone 13"],
+                              HEARTBEAT_HOURS=0, MIN_SAMPLES=8, MARKET_PERCENTILE=0.5,
+                              SOURCE_ALERT_HOURS=12)
+            catalog = market_items() + [item(1, "iPhone 13 128GB", 150, user_id=77)]
+            for run_no in range(2):
+                vinted = VintedSource(client=FakeClient({"iPhone 13": catalog}))
+                tg = FakeTelegram()
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    Run([vinted, BlockedSkelbiu(client=FakeHttp({}))], tg,
+                        sleep=lambda s: None).run()
+                log = out.getvalue()
+                self.assertIn("Skelbiu (Cloudflare apsauga)", log)
+                warnings = [m for m in tg.messages if "nepasiekiamas" in m]
+                # pirma karta pranesam, antra – jau ne (Telegram neuzkimsam)
+                self.assertEqual(len(warnings), 1 if run_no == 0 else 0, log)
+
     def test_blocked_counts(self):
         source = SkelbiuSource(client=FakeHttp({}))
         with contextlib.redirect_stdout(io.StringIO()):
