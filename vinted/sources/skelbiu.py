@@ -266,11 +266,37 @@ def parse_detail(page, city=None):
 _CLOUDFLARE_RE = re.compile(
     r"cloudflare|cf-mitigated|attention required|just a moment|"
     r"checking your browser|ray id", re.I)
+_RATE_RE = re.compile(r"too many requests|per daug uzklausu|rate limit|slow down", re.I)
+
+# curl_cffi "chrome" gali rodyti i sena versija, kurios parasas jau pazymetas.
+# Bandom kelis is eiles – kuris praeina, ta ir naudojam visa paleidima.
+IMPERSONATE_CHAIN = ["chrome", "chrome131", "chrome124", "chrome120",
+                     "safari17_0", "firefox133", "edge101"]
 
 
-def why_blocked(body):
-    """Ar tai apsauga nuo botu (IP blokas), ar paprastas uzklausu ribojimas."""
-    return "Cloudflare apsauga" if _CLOUDFLARE_RE.search(body or "") else "uzklausu ribojimas"
+def why_blocked(body, headers=None):
+    """Kas mus atmete. Kai pozymiu nera, sakom tiesiai – nezinom."""
+    text = body or ""
+    headers = {str(k).lower(): str(v) for k, v in dict(headers or {}).items()}
+    if _CLOUDFLARE_RE.search(text) or "cf-ray" in headers or "cloudflare" in headers.get("server", "").lower():
+        return "Cloudflare apsauga"
+    if _RATE_RE.search(text):
+        return "uzklausu ribojimas"
+    server = headers.get("server")
+    return f"neaiski priezastis (serveris: {server})" if server else "neaiski priezastis"
+
+
+def block_details(response):
+    """Trumpa eilute log'ui: kas atsake ir ka pasake. Be sito spelioti neimanoma."""
+    try:
+        headers = dict(getattr(response, "headers", {}) or {})
+    except Exception:
+        headers = {}
+    interesting = {k: v for k, v in headers.items()
+                   if str(k).lower() in ("server", "cf-ray", "cf-mitigated", "x-powered-by",
+                                         "retry-after", "content-type", "x-cache", "via")}
+    body = re.sub(r"\s+", " ", (getattr(response, "text", "") or ""))[:200]
+    return f"antrastes={interesting or '{}'} | tekstas: {body or '(tuscias)'}"
 
 
 class SkelbiuClient:
@@ -282,29 +308,60 @@ class SkelbiuClient:
         self.last_error = ""
         self.blocked = ""       # netuscias = svetaine mus atmete, nebandom toliau
         self.ok_count = 0       # kiek uzklausu pavyko (skiria "IP blokas" nuo "per greitai")
+        self.profile = None     # kuris narsykles parasas suveike
+
+    def _new_session(self, profile):
+        if not USING_CFFI:
+            return requests.Session()
+        return cffi_requests.Session(impersonate=profile)
+
+    def profiles(self):
+        pinned = config.cfg.get("SKELBIU_IMPERSONATE")
+        if pinned:
+            return [pinned]
+        return IMPERSONATE_CHAIN if USING_CFFI else [None]
 
     def start(self):
-        self.session = (cffi_requests.Session(impersonate="chrome") if USING_CFFI
-                        else requests.Session())
-        klientas = "curl_cffi (Chrome parasas)" if USING_CFFI else "requests (BE Chrome paraso!)"
-        try:
-            r = self.session.get(BASE + "/", headers=headers(referer=None), timeout=20)
-            print(f"Skelbiu sesija pradeta (statusas {r.status_code}, {klientas})")
-            if r.status_code in (403, 429):
-                self.blocked = why_blocked(r.text)
-                self.last_error = f"Skelbiu HTTP {r.status_code}: {self.blocked}"
-                print(f"! Skelbiu atmete pati pirma uzklausa – {self.blocked}. "
-                      f"Sio paleidimo metu Skelbiu praleidziu.")
-                debug("Skelbiu 403 atsakymas: " + re.sub(r"\s+", " ", r.text or "")[:300])
-            elif r.status_code != 200:
-                self.last_error = f"Skelbiu pagrindinis puslapis: HTTP {r.status_code}"
-            else:
+        """Bandom kelis narsykles parasus: „chrome“ gali rodyti i sena versija,
+        kurios pirstu atspaudas jau pazymetas kaip botas."""
+        if not USING_CFFI:
+            print("! curl_cffi neidiegtas – Skelbiu tikriausiai blokuos. "
+                  "Workflow faile: pip install requests curl_cffi")
+        last = None
+        for profile in self.profiles():
+            try:
+                self.session = self._new_session(profile)
+            except Exception as e:           # nezinomas profilis siai curl_cffi versijai
+                debug(f"Skelbiu profilis {profile} netinka: {e}")
+                continue
+            try:
+                r = self.session.get(BASE + "/", headers=headers(referer=None), timeout=20)
+            except Exception as e:
+                self.last_error = f"Skelbiu sesija nepavyko: {e}"
+                print(f"! {self.last_error}")
+                return
+            vardas = profile or "requests (BE Chrome paraso!)"
+            if r.status_code == 200:
                 self.ok_count += 1
-            if not USING_CFFI:
-                print("! curl_cffi neidiegtas – Skelbiu tikriausiai blokuos. "
-                      "Workflow faile: pip install requests curl_cffi")
-        except Exception as e:
-            self.last_error = f"Skelbiu sesija nepavyko: {e}"
+                self.blocked = ""
+                self.profile = profile
+                print(f"Skelbiu sesija pradeta (statusas 200, parasas: {vardas})")
+                return
+            last = r
+            print(f"  ! Skelbiu atmete parasa „{vardas}“ (HTTP {r.status_code})")
+            if r.status_code not in (403, 429):
+                break
+            self.sleep(2)
+
+        if last is not None:
+            self.blocked = why_blocked(getattr(last, "text", ""), getattr(last, "headers", {}))
+            self.last_error = f"Skelbiu HTTP {last.status_code}: {self.blocked}"
+            print(f"! Skelbiu atmete visus bandytus parasus – {self.blocked}. "
+                  f"Sio paleidimo metu Skelbiu praleidziu.")
+            print(f"  Skelbiu atsakymas: {block_details(last)}")
+        else:
+            self.last_error = "Skelbiu: nepavyko sukurti sesijos"
+            self.blocked = "nepavyko sukurti sesijos"
             print(f"! {self.last_error}")
 
     def get(self, url, tries=3):
@@ -320,7 +377,7 @@ class SkelbiuClient:
             try:
                 r = self.session.get(url, headers=headers(), timeout=25)
                 if r.status_code in (403, 429):
-                    reason = why_blocked(r.text)
+                    reason = why_blocked(r.text, getattr(r, "headers", {}))
                     self.last_error = f"Skelbiu HTTP {r.status_code} ({reason})"
                     # Jei dar NE VIENA uzklausa nepavyko, tai ne greitis – mus tiesiog
                     # neileidzia. Laukti 30+60+120s nera prasmes: sustojam is karto.
@@ -328,7 +385,7 @@ class SkelbiuClient:
                         self.blocked = reason
                         print(f"  ! Skelbiu {r.status_code} nuo pirmos uzklausos ({reason}) – "
                               "nebeaikvoju laiko, praleidziu Skelbiu siame paleidime.")
-                        debug("Skelbiu atsakymas: " + re.sub(r"\s+", " ", r.text or "")[:300])
+                        print(f"    Skelbiu atsakymas: {block_details(r)}")
                         return 0, ""
                     backoff = config.cfg["BLOCK_BACKOFF_SECONDS"]
                     pause = backoff[min(attempt - 1, len(backoff) - 1)]
