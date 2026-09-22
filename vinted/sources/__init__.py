@@ -3,9 +3,10 @@
 
 from .. import config
 from .base import Source
+from .skelbiu import SkelbiuSource
 from .vinted_source import VintedSource
 
-REGISTRY = {cls.name: cls for cls in (VintedSource,)}
+REGISTRY = {cls.name: cls for cls in (VintedSource, SkelbiuSource)}
 
 
 def build_sources(sleep=None):
@@ -31,4 +32,4 @@ def label(name):
     return cls.label if cls else str(name).capitalize()
 
 
-__all__ = ["Source", "VintedSource", "REGISTRY", "build_sources", "label"]
+__all__ = ["Source", "VintedSource", "SkelbiuSource", "REGISTRY", "build_sources", "label"]

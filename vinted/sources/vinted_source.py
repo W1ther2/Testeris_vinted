@@ -89,8 +89,8 @@ class VintedSource(Source):
             info = {**seller_from_page(page), **info}
         return info
 
-    def status(self, listing_id):
-        http_status, page, final_url = self.client.fetch_item_page(f"/items/{listing_id}")
+    def status(self, listing_id, url=None):
+        http_status, page, final_url = self.client.fetch_item_page(url or f"/items/{listing_id}")
         return listing_status(http_status, page, final_url, listing_id)
 
     # --- log'as -----------------------------------------------------------

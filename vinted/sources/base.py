@@ -14,6 +14,11 @@ class Source:
 
     name = "?"
     label = "?"
+    # Kiek puslapiu imti, palyginti su bendru nustatymu. Skelbiu rodo 24 skelbimus
+    # puslapyje, Vinted – 96, todel Skelbiu reikia daugiau puslapiu tam paciam kiekiui.
+    pages_multiplier = 1
+    # Ar perkant imamas pirkejo apsaugos mokestis (Vinted – taip, Skelbiu – ne).
+    buyer_protection_fee = True
 
     def __init__(self):
         self.last_error = ""
@@ -39,8 +44,8 @@ class Source:
         """`Detail` vienam skelbimui (aprasymas, bukle, pardavejas, ar parduotas)."""
         raise NotImplementedError
 
-    def status(self, listing_id):
-        """'active' / 'sold' / 'gone' / 'unknown' pagal saltinio viduje esanti ID."""
+    def status(self, listing_id, url=None):
+        """'active' / 'sold' / 'gone' / 'unknown'. `url` – issaugotas adresas, jei yra."""
         return "unknown"
 
     # --- pagalbinės -------------------------------------------------------
