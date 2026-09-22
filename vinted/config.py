@@ -29,6 +29,9 @@ DEFAULTS = {
     # atskirai. Greiciau ir randa daugiau (skelbimu pavadinimai ne visada sutampa su
     # raktazodziu). false = naudoti SEARCH_QUERIES kaip Vinted.
     "SKELBIU_BROWSE_ALL": True,
+    # Narsykles parasas Skelbiu (curl_cffi). Tuscia = bandom kelis is eiles ir
+    # naudojam ta, kuris praeina. Pvz. "chrome131".
+    "SKELBIU_IMPERSONATE": "",
 
     # --- Ka ieskoti ---
     "SEARCH_QUERIES": [
