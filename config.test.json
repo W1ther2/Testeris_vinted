@@ -4,6 +4,7 @@
     "skelbiu"
   ],
   "PARALLEL_SOURCES": true,
+  "SKELBIU_BROWSE_ALL": true,
   "SEARCH_QUERIES": [
     "iPhone 13",
     "iPhone 14 Pro"
@@ -42,6 +43,7 @@
   "TELEGRAM_COMMANDS": true,
   "HEARTBEAT_HOURS": 0,
   "FAIL_ALERT_RUNS": 3,
+  "SOURCE_ALERT_HOURS": 12,
   "ACCESSORY_FIRST_WORDS": [
     "deklas",
     "dekl",
