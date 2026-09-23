@@ -43,6 +43,10 @@ def save_seen(seen, path=None):
     path = path or config.SEEN_FILE
     c = config.cfg
     now = time.time()
+    # Kopija vienu zingsniu: kol vienas saltinis issaugo, kitas (kitoje gijoje) gali
+    # prideti nauju irasu – iteruojant tiesiai zodyna tai baigdavosi
+    # „dictionary changed size during iteration“ ir nutraukdavo to saltinio patikra.
+    seen = dict(seen)
     fresh = {k: v for k, v in seen.items()
              if not k.startswith("__") and now - v <= c["SEEN_MAX_AGE_DAYS"] * 86400}
     newest = sorted(fresh.items(), key=lambda kv: kv[1], reverse=True)[: c["SEEN_MAX_ENTRIES"]]

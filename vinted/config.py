@@ -123,7 +123,7 @@ DEFAULTS = {
     "TELEGRAM_COMMANDS": True,       # leisti keisti nustatymus komandomis Telegram'e
     # Kas gali keisti nustatymus. Tuscia = niekas (komandos grupeje ignoruojamos).
     # Savo ID suzinosi parases botui privaciai /start.
-    "ADMIN_IDS": [6157710734],
+    "ADMIN_IDS": [],
     "HEARTBEAT_HOURS": 24,
     "FAIL_ALERT_RUNS": 3,            # po kiek nesekmingu paleidimu is eiles pranesti apie problema
     "SOURCE_ALERT_HOURS": 12,        # kaip daznai pranesti apie blokuojama saltini (0 = kas karta)

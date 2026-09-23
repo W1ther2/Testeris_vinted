@@ -67,6 +67,10 @@ class Run:
         drop_from = None
 
         if uid in self.new_seen:
+            # Skelbimas vis dar sarase – atnaujinam laika. Kitaip po SEEN_MAX_AGE_DAYS
+            # jis „pamirstamas“ ir issiunciamas is naujo (Pirkpard skelbimai sarase
+            # isbuna savaites, tad tai kartodavosi kas 7 dienas).
+            self.new_seen[uid] = time.time()
             prev = drops.get(uid)
             if not (c["PRICE_DROP_ALERTS"] and prev and price is not None
                     and price <= prev * (1 - c["PRICE_DROP_MIN"])):
