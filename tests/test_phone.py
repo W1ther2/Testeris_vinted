@@ -90,6 +90,29 @@ class DefectTest(unittest.TestCase):
     def test_fatal_defects_zero(self):
         self.assertTrue(any(f == 0 for _, f in find_defects("iCloud užblokuotas")))
 
+    def test_real_listing_locked_without_battery(self):
+        """Tikras Vinted skelbimas, atejes kaip „pigiausias iš 154“: rasybos klaida ir „be akumo“."""
+        labels = self.labels("iPhone 14 - Užbluokuotas be akumo")
+        self.assertIn("užblokuotas", labels)
+        self.assertIn("be baterijos", labels)
+
+    def test_lock_typos(self):
+        for text in ["užbluokuotas", "Užblokuotas", "užlockintas", "blukuotas", "uzblokuotas operatoriui"]:
+            self.assertIn("užblokuotas", self.labels(text), text)
+        for text in ["neužblokuotas", "nėra užblokuotas", "iCloud atrištas, neblokuotas",
+                     "bloknotas dovanų", "lokalus pardavimas", "su blokeliu"]:
+            self.assertNotIn("užblokuotas", self.labels(text), text)
+
+    def test_missing_battery(self):
+        for text in ["be akumo", "nėra baterijos", "trūksta akumo", "neturi baterijos",
+                     "be dėžutės be akumo", "no battery", "without battery"]:
+            self.assertIn("be baterijos", self.labels(text), text)
+        # „be“ cia reiskia „be problemu“ – telefonas tvarkingas
+        for text in ["be baterijos keitimo", "be baterijos problemų, veikia", "be akumuliatoriaus pakeitimo",
+                     "no battery issues", "be originalios baterijos", "baterija 90%, be jokių defektų",
+                     "be įbrėžimų, baterija 88%"]:
+            self.assertNotIn("be baterijos", self.labels(text), text)
+
 
 class SpecsTest(unittest.TestCase):
     def setUp(self):
