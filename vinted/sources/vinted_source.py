@@ -42,7 +42,8 @@ class VintedSource(Source):
             return max(1, pages)
         c = config.cfg
         pirmas_kartas = pages >= c["FULL_SCAN_PAGES"]
-        return c["VINTED_FULL_SCAN_PAGES"] if pirmas_kartas else c["VINTED_BROWSE_PAGES"]
+        norima = c["VINTED_FULL_SCAN_PAGES"] if pirmas_kartas else c["VINTED_BROWSE_PAGES"]
+        return max(1, min(norima, c["VINTED_MAX_PAGES"]))
 
     # --- gyvavimo ciklas --------------------------------------------------
     def start(self):
