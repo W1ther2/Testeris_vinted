@@ -4,6 +4,12 @@
     "pirkpard"
   ],
   "PARALLEL_SOURCES": true,
+  "VINTED_BROWSE_ALL": true,
+  "VINTED_QUERIES": [
+    "iphone"
+  ],
+  "VINTED_BROWSE_PAGES": 5,
+  "VINTED_FULL_SCAN_PAGES": 25,
   "SKELBIU_BROWSE_ALL": true,
   "SKELBIU_IMPERSONATE": "",
   "PIRKPARD_QUERIES": [
