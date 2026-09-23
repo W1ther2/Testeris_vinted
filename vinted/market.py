@@ -254,7 +254,10 @@ class Market:
                     continue
                 if by_storage and e.get("s") != storage:
                     continue
-                if day - e.get("l", day) > c["PRICE_HISTORY_DAYS"]:
+                # "Dabar parduodamas" = matytas kataloge neseniai. Anksciau cia buvo 30 d.,
+                # ir i palyginima patekdavo jau parduoti telefonai – nupirkti negalima,
+                # o vietos skaiciavima iskreipia (pvz. „3-as pigiausias is 231“).
+                if day - e.get("l", day) > c["RANK_RECENT_DAYS"]:
                     continue
                 # Ilgai kabantys – per brangus rinkai, su jais lyginant viskas atrodytu pigu
                 if day - e.get("f", day) > c["ASKING_MAX_AGE_DAYS"]:

@@ -31,7 +31,8 @@ DEFAULTS = {
     "VINTED_BROWSE_ALL": True,
     "VINTED_QUERIES": ["iphone"],
     "VINTED_BROWSE_PAGES": 5,        # po 96 skelb. = 480 naujausiu, iprastam paleidimui su kaupu
-    "VINTED_FULL_SCAN_PAGES": 25,    # pirmam paleidimui (seen.json tuscias)
+    "VINTED_FULL_SCAN_PAGES": 10,    # pirmam paleidimui (seen.json tuscias)
+    "VINTED_MAX_PAGES": 10,          # Vinted giliau neleidzia: 11-as puslapis = HTTP 400
 
     # Skelbiu: narsyti visa Apple kategorija vienu sarasu, o ne ieskoti kiekvieno modelio
     # atskirai. Greiciau ir randa daugiau (skelbimu pavadinimai ne visada sutampa su
@@ -65,6 +66,9 @@ DEFAULTS = {
     "DEAL_MODE": "rank",
     "RANK_TOP_PCT": 0.15,            # tarp 15% pigiausiu (23 skelbimai -> 1-4 vietos)
     "RANK_MIN_PEERS": 8,             # maziau aktyviu skelbimu – vieta nieko nereiskia
+    # "Dabar parduodami" = matyti kataloge per paskutines tiek dienu. Senesni greiciausiai
+    # jau parduoti – su jais lyginti butu tas pats, kas lyginti su nebeegzistuojanciais.
+    "RANK_RECENT_DAYS": 2,
     "MIN_DISCOUNT": 0.10,            # bent 10% pigiau nei telefono verte
     "HARD_MIN_PRICE_RATIO": 0.40,    # pigiau nei 40% rinkos – beveik visada sugedes/dalims/ne telefonas, atmetama
     "SUSPICIOUS_PRICE_RATIO": 0.55,  # pigiau nei 55% rinkos – siunciama, bet pazymima rizika

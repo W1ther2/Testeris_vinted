@@ -341,6 +341,21 @@ class Run:
         start = self.state.query_offset % len(queries)
         return list(queries[start:]) + list(queries[:start])
 
+    @staticmethod
+    def mark_foreign(listings):
+        """Vinted rodo ir kitu saliu skelbimus („Sprzedam, stan idealny“). Jie ne tik
+        netinka – ju kainos iskraipo lyginima su Lietuvos rinka. Pavadinimo uztenka,
+        kad daugumas butu atpazinti dar pries atidarant skelbimo puslapi."""
+        if not config.cfg["ONLY_LITHUANIAN_TEXT"]:
+            return
+        allowed = config.allowed_languages()
+        for listing in listings:
+            if listing.skip_reason:
+                continue
+            lang = detect_foreign_language(listing.title or "", "")
+            if lang and lang not in allowed:
+                listing.skip_reason = f"kalba ({lang}, pagal pavadinimą)"
+
     def scan(self, source, seen, pages):
         """Viena saltinio perziura. Grazina, kiek skelbimu gauta."""
         c = config.cfg
@@ -370,6 +385,7 @@ class Run:
             listings = source.search(q, pages, seen)
             self.last_error = source.last_error or self.last_error
             fetched += len(listings)
+            self.mark_foreign(listings)
             drops = self.state.market.observe(listings)
             self.examples, sent_before = [], len(self.alerts)
             for listing in listings:
@@ -550,10 +566,15 @@ class Run:
             if model not in rows and model not in manual:
                 continue
             a, n, s, ns = rows.get(model, (None, 0, None, 0))
-            used = manual.get(model) or s or a
+            # "naudojama" – tai, ka IS TIKRUJU grazina quote(), o ne spejimas pagal stulpelius.
+            # Anksciau cia buvo "rankine arba parduoti arba ivertinta", ir su 2 pardavimais
+            # rode parduotu mediana, nors kodas jos nenaudoja, kol ju maziau nei MIN_SOLD_SAMPLES.
+            q = self.state.market.quote(model, None)
+            kodel = {"rankinė": "ranka", "parduoti": "parduoti", "skelbimai": "skelb.",
+                     "apytikslė": "apytiksl."}.get(q.source, "") if q else ""
             print(f"  iPhone {model:<11} rankinė: {manual.get(model, 0):>4.0f}  "
                   f"parduoti: {s or 0:>4.0f} ({ns})  įvertinta: {a or 0:>4.0f} ({n})  "
-                  f"-> naudojama: {used or 0:>4.0f}")
+                  f"-> naudojama: {q.price if q else 0:>4.0f} ({kodel})")
 
     def heartbeat(self, fetched, summary):
         hours = config.cfg["HEARTBEAT_HOURS"]
