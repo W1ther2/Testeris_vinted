@@ -26,6 +26,9 @@ class Listing:
     # Kai saltinis jau is saraso mato, kad skelbimas netinka (aukcionas, dalims,
     # rezervuotas), cia irasoma priezastis – ji pateks i atmetimu statistika.
     skip_reason: str = ""
+    # Kiek is tikruju sumoketum: kaina + saltinio pirkejo apsaugos mokestis.
+    # Vinted ji pateikia tiesiogiai, tad spelioti nebereikia.
+    total_price: float = None
     raw: dict = field(default_factory=dict)
 
     @property

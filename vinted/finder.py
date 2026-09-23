@@ -185,7 +185,8 @@ class Run:
         risk_level, risk_reasons = assess_risk(detail.title or title, description, price, quote.price,
                                                seller, listing.photo_count)
         profit = estimate_profit(price, value, pickup_only=PICKUP_LABEL in risk_reasons,
-                                 buyer_fee=getattr(source, "buyer_protection_fee", True))
+                                 buyer_fee=getattr(source, "buyer_protection_fee", True),
+                                 total_price=listing.total_price)
 
         deal = {
             "id": uid, "source": source.name, "source_label": getattr(source, "label", source.name),
@@ -247,21 +248,49 @@ class Run:
             self.state.save()
 
     def check_sold(self):
-        """Senus skelbimus tikrinam tame saltinyje, is kurio jie atejo."""
+        """Senus skelbimus tikrinam tame saltinyje, is kurio jie atejo.
+
+        Kaip ir paieska, saltiniai tikrinami vienu metu: Vinted kiekvienam skelbimui
+        atidaro atskira puslapi (letai), o Pirkpard busena visiems gauna viena
+        uzklausa – nera prasmes jam laukti, kol Vinted baigs."""
         by_name = {s.name: s for s in self.sources}
-        found = {"sold": 0, "gone": 0}
+        groups = {}
         for uid in self.state.market.sold_check_candidates():
-            if self.out_of_time():
-                break
             source_name, local_id = split_uid(uid)
-            source = by_name.get(source_name)
-            if source is None:
-                continue
-            st = source.status(local_id, (self.state.market.get(uid) or {}).get("u"))
-            self.state.market.set_status(uid, st)
-            if st in found:
-                found[st] += 1
-            self.sleep(config.cfg["DETAIL_SLEEP_SECONDS"])
+            if source_name in by_name:
+                groups.setdefault(source_name, []).append((uid, local_id))
+        if not groups:
+            return
+
+        found = {"sold": 0, "gone": 0}
+
+        def check(source_name, items):
+            source = by_name[source_name]
+            for uid, local_id in items:
+                if self.out_of_time():
+                    break
+                url = (self.state.market.get(uid) or {}).get("u")
+                st = source.status(local_id, url)
+                with self.lock:
+                    self.state.market.set_status(uid, st)
+                    if st in found:
+                        found[st] += 1
+                if getattr(source, "detail_needs_request", True):
+                    self.sleep(config.cfg["DETAIL_SLEEP_SECONDS"])
+
+        if config.cfg["PARALLEL_SOURCES"] and len(groups) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
+                futures = {pool.submit(check, name, items): name
+                           for name, items in groups.items()}
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"! Pardavimu patikra ({futures[future]}) nutruko: {e}")
+        else:
+            for name, items in groups.items():
+                check(name, items)
+
         if any(found.values()):
             extra = " (dingusius laikom parduotais)" if config.cfg["GONE_AS_SOLD"] else ""
             print(f"Pardavimu patikra: parduota {found['sold']}, dingo {found['gone']}{extra}")
@@ -283,7 +312,7 @@ class Run:
         if source.unavailable:
             print(f"! [{source.label}] siame paleidime nepasiekiamas: {source.unavailable}")
             return 0
-        pages = max(1, int(pages * getattr(source, "pages_multiplier", 1)))
+        pages = source.page_count(pages)
         queries = self.rotated(source.queries())
         if c["ROTATE_QUERIES"] and len(queries) > 1:
             print(f"[{source.label}] pradedama nuo: {source.describe(queries[0])}")

@@ -25,6 +25,14 @@ DEFAULTS = {
     # Saltiniai tikrinami vienu metu (jie eina i skirtingus serverius, tad vienas kito
     # nestabdo). false = paeiliui, tada laikas dalijamas po lygiai.
     "PARALLEL_SOURCES": True,
+    # Vinted: viena paieska "iphone" grazina VISUS modelius, tad 34 atskiru nereikia.
+    # Tai maziausiai 30 kartu maziau uzklausu ir tiek pat kartu greiciau.
+    # false = ieskoti kiekvieno modelio atskirai pagal SEARCH_QUERIES.
+    "VINTED_BROWSE_ALL": True,
+    "VINTED_QUERIES": ["iphone"],
+    "VINTED_BROWSE_PAGES": 5,        # po 96 skelb. = 480 naujausiu, iprastam paleidimui su kaupu
+    "VINTED_FULL_SCAN_PAGES": 25,    # pirmam paleidimui (seen.json tuscias)
+
     # Skelbiu: narsyti visa Apple kategorija vienu sarasu, o ne ieskoti kiekvieno modelio
     # atskirai. Greiciau ir randa daugiau (skelbimu pavadinimai ne visada sutampa su
     # raktazodziu). false = naudoti SEARCH_QUERIES kaip Vinted.
