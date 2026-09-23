@@ -8,7 +8,7 @@
   "VINTED_QUERIES": [
     "iphone"
   ],
-  "VINTED_BROWSE_PAGES": 5,
+  "VINTED_BROWSE_PAGES": 3,
   "VINTED_FULL_SCAN_PAGES": 10,
   "VINTED_MAX_PAGES": 10,
   "SKELBIU_BROWSE_ALL": true,
@@ -102,8 +102,8 @@
     "LT",
     "EN"
   ],
-  "PAGES": 3,
-  "FULL_SCAN_PAGES": 10,
+  "PAGES": 2,
+  "FULL_SCAN_PAGES": 5,
   "SLEEP_SECONDS": 3,
   "DETAIL_SLEEP_SECONDS": 1.0,
   "DRY_RUN": false,
