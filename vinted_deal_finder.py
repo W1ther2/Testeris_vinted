@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-iPhone deal finder v30.
+iPhone deal finder v31.
 
 Iesko iPhone 8 … 17 Pro Max, kurie pigesni uz rinkos kaina (ivertinus bukle,
 baterija ir defektus), ir siuncia juos i Telegram.
