@@ -11,7 +11,9 @@ HELP = """<b>Komandos</b>
 /kaina 13 Pro Max 256 390 – konkrečiai talpai
 /kaina 13 trinti – grąžinti automatinę kainą
 /kainos – visos rinkos kainos
-/nuolaida 20 – siųsti nuo 20% pigiau nei vertė
+/pigiausi 15 – siųsti tarp 15% pigiausių dabar parduodamų
+/rezimas pigiausi|nuolaida – kaip spręsti, ar pigu
+/nuolaida 20 – (nuolaidos režimas) siųsti nuo 20% pigiau nei vertė
 /baterija 80 – min. baterija (0 – netikrinti)
 /garsas 30 – su garsu tik nuo 30% pigiau
 /rinka 50 – rinkos kaina = mediana (35 – pigesnis trečdalis, griežčiau)
@@ -60,6 +62,8 @@ def _prices_text(state):
 TIPS = {
     "per brangu": "normalu – kaina ne žemiau rinkos. Daugiau skelbimų: /nuolaida 10",
     "ne pakankamai pigu": "pigiau už rinką, bet mažiau nei nuolaida. Daugiau: /nuolaida 10",
+    "ne tarp pigiausių": "normalu – skelbimas ne tarp pigiausių dabar. Daugiau: /pigiausi 25",
+    "(retas modelis": "per mažai tokių skelbimų palyginti – vertinta pagal nuolaidą",
     "per mazai kainu duomenu": "modeliui dar trūksta kainų – kaupsis savaime arba /kaina 13 180",
     "ne telefonas / kitas modelis": "dėklai, stiklai, kiti modeliai – normalu",
     "defektai": "sugedę telefonai. Siųsti ir juos: /tvarkingi ne",
@@ -237,6 +241,28 @@ def handle(text, state):
             _set(state, "MIN_DISCOUNT", v)
             return f"✅ Siųsiu skelbimus nuo {v:.0%} pigiau nei vertė"
 
+        if cmd == "pigiausi":
+            v = _percent(args)
+            if not 0.01 <= v <= 0.9:
+                raise ValueError
+            _set(state, "RANK_TOP_PCT", v)
+            _set(state, "DEAL_MODE", "rank")
+            return (f"✅ Siųsiu skelbimus, kurie tarp {v:.0%} pigiausių šiuo metu parduodamų "
+                    f"tokių pat telefonų.\n<i>Rinkos kainos žinoti nereikia – lyginama su "
+                    f"realiais dabartiniais skelbimais.</i>")
+
+        if cmd in ("rezimas", "režimas"):
+            a = args.lower().strip()
+            if a.startswith("pig") or a == "rank":
+                _set(state, "DEAL_MODE", "rank")
+                return (f"✅ Režimas: tarp {c['RANK_TOP_PCT']:.0%} pigiausių dabar parduodamų "
+                        f"(keisti: /pigiausi 20)")
+            if a.startswith("nuol") or a == "discount":
+                _set(state, "DEAL_MODE", "discount")
+                return (f"✅ Režimas: bent {c['MIN_DISCOUNT']:.0%} pigiau nei įvertinta vertė "
+                        f"(keisti: /nuolaida 15)")
+            raise ValueError
+
         if cmd == "baterija":
             v = int(float(args.replace("%", "")))
             if not 0 <= v <= 100:
@@ -282,7 +308,10 @@ def handle(text, state):
 
         if cmd == "nustatymai":
             manual = config.market_prices()
+            rezimas = (f"tarp {c['RANK_TOP_PCT']:.0%} pigiausių dabar" if c.get("DEAL_MODE") == "rank"
+                       else f"bent {c['MIN_DISCOUNT']:.0%} pigiau nei vertė")
             return ("<b>Nustatymai</b>\n"
+                    f"Kas laikoma pigiu: {rezimas}\n"
                     f"Min. nuolaida: {c['MIN_DISCOUNT']:.0%}\n"
                     f"Rinkos kaina: {c['MARKET_PERCENTILE']:.0%} percentilis\n"
                     f"Su garsu nuo: {c['LOUD_DISCOUNT']:.0%}\n"

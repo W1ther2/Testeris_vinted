@@ -103,10 +103,30 @@ class Run:
         if c["TIDY_ONLY"] and not condition_ok(cat_condition, c["MIN_CONDITION"]):
             self.new_seen[uid] = time.time()
             return self.reject(f"būklė {cat_condition}")
-        best_case = quote.price * CONDITION_FACTOR.get(cat_condition, 1.08) * 1.03
-        if price > best_case * (1 - c["MIN_DISCOUNT"]):
-            self.new_seen[uid] = time.time()
-            return self.reject("per brangu")
+
+        # Ar pigu? Du budai:
+        #  "rank"     – ar skelbimas tarp pigiausiu siuo metu parduodamu tokiu pat telefonu.
+        #               Nereikia zinoti rinkos kainos, tad isputa mediana netrukdo.
+        #  "discount" – ar pigiau nei musu ivertinta verte (senasis budas; naudojamas ir
+        #               tada, kai palyginti per mazai – pvz. retiems modeliams).
+        rank = None
+        if c["DEAL_MODE"] == "rank":
+            rank = self.state.market.rank(model, storage, price, exclude=uid)
+            if rank is None:
+                with self.lock:
+                    self.totals["(retas modelis – vertinta pagal nuolaidą)"] = \
+                        self.totals.get("(retas modelis – vertinta pagal nuolaidą)", 0) + 1
+        if rank is not None:
+            if rank.share > c["RANK_TOP_PCT"]:
+                self.new_seen[uid] = time.time()
+                return self.reject("ne tarp pigiausių",
+                                   f"iPhone {model} {price:.0f}€ – {rank.place}-as iš {rank.n} "
+                                   f"({rank.low:.0f}–{rank.high:.0f}€)")
+        else:
+            best_case = quote.price * CONDITION_FACTOR.get(cat_condition, 1.08) * 1.03
+            if price > best_case * (1 - c["MIN_DISCOUNT"]):
+                self.new_seen[uid] = time.time()
+                return self.reject("per brangu")
         # Riba: 40% rinkos kainos arba modelio minimali kaina – kuri mazesne (kad
         # apytiksle kaina ar mano ivertinta minimali kaina neatmestu tikru pigiu telefonu)
         floor = min(quote.price * c["HARD_MIN_PRICE_RATIO"], min_price(model) or float("inf"))
@@ -144,12 +164,25 @@ class Run:
         if c["TIDY_ONLY"] and not condition_ok(condition, c["MIN_CONDITION"]):
             return self.reject(f"būklė {condition}")
 
+        title_storage = storage
         storage = storage or extract_storage(description)
         quote = self.state.market.quote(model, storage) or quote
+        # Talpa paaiskejo tik is aprasymo – palyginam dar karta, jau su ta pacia talpa
+        # (64 GB ir 512 GB tame paciame sarase iskreiptu vieta).
+        if rank is not None and storage and storage != title_storage:
+            tikslesnis = self.state.market.rank(model, storage, price, exclude=uid)
+            if tikslesnis is not None:
+                rank = tikslesnis
+                if rank.share > c["RANK_TOP_PCT"]:
+                    return self.reject("ne tarp pigiausių",
+                                       f"iPhone {model} {storage} {price:.0f}€ – "
+                                       f"{rank.place}-as iš {rank.n}")
         battery = extract_battery(title, description)
         value = estimate_value(quote.price, condition, battery, defects)
         discount = 1 - price / value
-        if discount < c["MIN_DISCOUNT"]:
+        # Pigiausiu budu spejama verte nebera sprendimo pagrindas – ji lieka tik korteles
+        # informacijai ir pelno ivertinimui.
+        if rank is None and discount < c["MIN_DISCOUNT"]:
             how = f"tik {discount:.0%} pigiau" if discount > 0 else f"{-discount:.0%} brangiau"
             return self.reject("ne pakankamai pigu", f"iPhone {model} {price:.0f}€, vertė {value:.0f}€ ({how})")
 
@@ -157,7 +190,11 @@ class Run:
         # Nenurodyta – praleidziam, bet kortelėje parasom "nenurodyta".
         battery_low = False
         if c["MIN_BATTERY"] and battery is not None and battery < c["MIN_BATTERY"]:
-            if discount < c["LOW_BATTERY_MIN_DISCOUNT"]:
+            # Isimtis silpnai baterijai – tik kai kaina tikrai isskirtine:
+            # pigiausiu budu – pats pigiausias; nuolaidos budu – didele nuolaida.
+            isskirtine = (rank.place == 1) if rank is not None \
+                else discount >= c["LOW_BATTERY_MIN_DISCOUNT"]
+            if not isskirtine:
                 return self.reject("baterija", f"{title[:40]} {battery}%")
             battery_low = True
 
@@ -196,7 +233,7 @@ class Run:
             "battery_low": battery_low, "defects": [d for d, _ in defects],
             "quote": quote, "value": value, "discount": discount, "profit": profit,
             "seller": seller, "risk_level": risk_level, "risk_reasons": risk_reasons,
-            "drop_from": drop_from, "created_at": listing.created_at,
+            "drop_from": drop_from, "created_at": listing.created_at, "rank": rank,
             "age": human_age(listing.created_at),
         }
         if c["PAUSED"]:
@@ -346,13 +383,18 @@ class Run:
                 with self.lock:
                     self.alerts.append(deal)
                     self.state.market.mark_alerted(deal["id"], deal["price"])
-                    silent = deal["discount"] < c["LOUD_DISCOUNT"]
+                    rank = deal.get("rank")
+                    # Pigiausiu budu garsiai – tik pats pigiausias (nuolaida cia remiasi
+                    # ta pacia spejama verte, kuria ir nepasitikim)
+                    silent = (rank.place != 1) if rank is not None \
+                        else deal["discount"] < c["LOUD_DISCOUNT"]
                     self.tg.send_deal(deal, silent=silent)
                     self.send_personal(deal)
                     tag = f"atpigo nuo {deal['drop_from']:.0f}, " if deal["drop_from"] else ""
+                    kiek = (f"{rank.place}-as pigiausias is {rank.n}" if rank is not None
+                            else f"-{deal['discount']:.0%}")
                     print(f"  -> [{source.label}] iPhone {deal['model']} {deal['price']:.0f} EUR "
-                          f"({tag}-{deal['discount']:.0%}{', tyliai' if silent else ''}): "
-                          f"{deal['title'][:45]}")
+                          f"({tag}{kiek}{', tyliai' if silent else ''}): {deal['title'][:45]}")
                     save_seen(self.new_seen)
                     self.state.save()
                 self.sleep(1)

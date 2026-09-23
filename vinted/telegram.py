@@ -25,7 +25,19 @@ def format_card(d):
     lines = [f"{icons}<b>{html.escape(name)} | {d['price']:g} €</b>"]
     if d.get("drop_from"):
         lines.append(f"📉 <b>Atpigo:</b> {d['drop_from']:g} € → {d['price']:g} €")
-    lines.append(f"💰 <b>{d['discount']:.0%} pigiau nei vertė</b> (~{d['value']:.0f} €)")
+    r = d.get("rank")
+    if r is not None:
+        # Pagrindinis argumentas – vieta tarp dabar parduodamu. Ji nepriklauso nuo to,
+        # ar musu rinkos kainos spejimas teisingas.
+        vieta = "Pigiausias" if r.place == 1 else f"{r.place}-as pigiausias"
+        kas = (f"tokių pat ({html.escape(d['storage'])})" if r.by_storage and d.get("storage")
+               else f"iPhone {html.escape(d['model'])}")
+        lines.append(f"🏷 <b>{vieta} iš {r.n}</b> dabar parduodamų {kas} "
+                     f"({r.low:.0f}–{r.high:.0f} €)")
+        if d["discount"] > 0:
+            lines.append(f"💰 ~{d['discount']:.0%} pigiau nei vertinta (~{d['value']:.0f} €)")
+    else:
+        lines.append(f"💰 <b>{d['discount']:.0%} pigiau nei vertė</b> (~{d['value']:.0f} €)")
     if config.cfg["SHOW_PROFIT"] and d.get("profit") is not None:
         if d["profit"] > 0:
             lines.append(f"💵 <b>Galimas pelnas:</b> ~{d['profit']:.0f} € (perpardavus už ~{d['value']:.0f} €)")

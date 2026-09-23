@@ -33,6 +33,17 @@ class Quote:
     by_storage: bool
 
 
+@dataclass
+class Rank:
+    """Kur sis skelbimas stovi tarp siuo metu parduodamu tokiu pat telefonu."""
+    place: int            # 1 = pigiausias
+    n: int                # kiek is viso palyginta (iskaitant ji pati)
+    low: float            # pigiausias tarp ju
+    high: float           # brangiausias tarp ju
+    share: float          # kokia dalis KITU yra pigesni (0.0 = pigiausias)
+    by_storage: bool      # lyginta su ta pacia talpa ar su visu modeliu
+
+
 def with_source(key):
     """Seni irasai buvo raktais be saltinio ('123') – dabar visi 'vinted:123'."""
     return key if ":" in key else "vinted:" + key
@@ -223,6 +234,42 @@ class Market:
             if len(asking) >= 3:
                 guess = (guess + percentile(asking, c["MARKET_PERCENTILE"]) * self.sale_factor()) / 2
             return Quote(guess, len(asking), "apytikslė", False)
+        return None
+
+    # --- vieta tarp siuo metu parduodamu --------------------------------------
+    @locked
+    def rank(self, model, storage, price, exclude=None, day=None):
+        """Kur si kaina stovi tarp siuo metu aktyviu to paties modelio skelbimu.
+
+        Tai nepriklauso nuo rinkos kainos spejimo: nesvarbu, ar mediana teisinga,
+        pigiausi 15% dabartiniu skelbimu vis tiek yra pigiausi 15%.
+        Grazina Rank arba None, jei palyginti per mazai (tada naudojamas senasis budas)."""
+        c = config.cfg
+        day = day if day is not None else today()
+
+        def peers(by_storage):
+            out = []
+            for uid, e in self.items.items():
+                if uid == exclude or e["m"] != model or e.get("st") != "active":
+                    continue
+                if by_storage and e.get("s") != storage:
+                    continue
+                if day - e.get("l", day) > c["PRICE_HISTORY_DAYS"]:
+                    continue
+                # Ilgai kabantys – per brangus rinkai, su jais lyginant viskas atrodytu pigu
+                if day - e.get("f", day) > c["ASKING_MAX_AGE_DAYS"]:
+                    continue
+                out.append(e["p"])
+            return trimmed(out)
+
+        for by_storage in ([True, False] if storage else [False]):
+            prices = peers(by_storage)
+            if len(prices) < c["RANK_MIN_PEERS"]:
+                continue
+            cheaper = sum(1 for p in prices if p < price - 0.01)
+            everyone = prices + [price]
+            return Rank(place=cheaper + 1, n=len(everyone), low=min(everyone), high=max(everyone),
+                        share=cheaper / len(prices), by_storage=by_storage)
         return None
 
     # --- tikslumas ir savikalibracija -----------------------------------------

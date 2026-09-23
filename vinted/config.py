@@ -58,6 +58,13 @@ DEFAULTS = {
     ],
 
     # --- Kas yra "gera kaina" ---
+    # "rank"     – siunciam, jei skelbimas tarp pigiausiu SIUO METU parduodamu tokiu pat
+    #              telefonu (tas pats modelis ir talpa). Rinkos kainos zinoti nereikia.
+    # "discount" – siunciam, jei pigiau nei musu ivertinta verte (senasis budas).
+    # Kai palyginti per mazai (reti modeliai), "rank" pats grizta prie "discount".
+    "DEAL_MODE": "rank",
+    "RANK_TOP_PCT": 0.15,            # tarp 15% pigiausiu (23 skelbimai -> 1-4 vietos)
+    "RANK_MIN_PEERS": 8,             # maziau aktyviu skelbimu – vieta nieko nereiskia
     "MIN_DISCOUNT": 0.10,            # bent 10% pigiau nei telefono verte
     "HARD_MIN_PRICE_RATIO": 0.40,    # pigiau nei 40% rinkos – beveik visada sugedes/dalims/ne telefonas, atmetama
     "SUSPICIOUS_PRICE_RATIO": 0.55,  # pigiau nei 55% rinkos – siunciama, bet pazymima rizika
@@ -184,7 +191,7 @@ def load(path=CONFIG_FILE):
 
 # Raktai, kuriuos galima keisti Telegram komandomis
 OVERRIDABLE = {"MIN_DISCOUNT", "MIN_BATTERY", "LOUD_DISCOUNT", "MARKET_PRICES", "PAUSED", "TIDY_ONLY",
-               "MARKET_PERCENTILE", "SHOW_PROFIT", "AUTO_CALIBRATE"}
+               "MARKET_PERCENTILE", "SHOW_PROFIT", "AUTO_CALIBRATE", "DEAL_MODE", "RANK_TOP_PCT"}
 
 
 def apply_overrides(overrides):
