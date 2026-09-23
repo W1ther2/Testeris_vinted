@@ -203,3 +203,92 @@ class CommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CurrentMarketTest(unittest.TestCase):
+    """„Dabar parduodami“ turi reiksti dabar, o ne per paskutinias 30 dienu.
+
+    Gyvas log'as rode „3-as pigiausias is 231“ – i palyginima pateko jau parduoti
+    telefonai. Ju nupirkti nebegalima, o pigus dealas atrodo vidutiniskas."""
+
+    def test_sold_long_ago_do_not_count(self):
+        rank_config(RANK_RECENT_DAYS=2, ASKING_MAX_AGE_DAYS=21, PRICE_HISTORY_DAYS=30)
+        m = Market()
+        # pries 10 dienu buvo daug pigiu skelbimu – jie seniai parduoti (kataloge nebematyti)
+        fill(m, [120 + i for i in range(40)], start=1000, day=90)
+        # dabar parduodami – brangesni
+        fill(m, [200 + 5 * i for i in range(12)], start=5000, day=100)
+        r = m.rank("13", "128 GB", 190, day=100)
+        self.assertEqual(r.n, 13)                     # tik dabartiniai 12 + jis pats
+        self.assertEqual(r.place, 1)                  # tarp dabar parduodamu – pigiausias
+
+    def test_same_data_with_old_window_would_bury_the_deal(self):
+        """Tas pats su senuoju 30 d. langu: dealas atsiduria 41-oje vietoje."""
+        rank_config(RANK_RECENT_DAYS=30, ASKING_MAX_AGE_DAYS=21, PRICE_HISTORY_DAYS=30)
+        m = Market()
+        fill(m, [120 + i for i in range(40)], start=1000, day=90)
+        fill(m, [200 + 5 * i for i in range(12)], start=5000, day=100)
+        r = m.rank("13", "128 GB", 190, day=100)
+        self.assertEqual(r.place, 41)
+        self.assertGreater(r.share, 0.15)             # -> butu atmestas
+
+
+class ForeignTitleTest(unittest.TestCase):
+    """Vinted rodo ir Lenkijos skelbimus. Ju kainos neturi lemti Lietuvos rinkos."""
+
+    def setUp(self):
+        rank_config(ONLY_LITHUANIAN_TEXT=True, ALLOWED_LANGUAGES=["LT", "EN"])
+
+    def test_foreign_titles_marked_before_detail_fetch(self):
+        from vinted.finder import Run
+        ls = [listing(1, "Iphone 12 | Iphone 12 - Sprzedam IP 12 , stan idealny wizualny", 150),
+              listing(2, "iphone 13 Stan bardzo dobry", 200),
+              listing(3, "iPhone 13 128GB", 200),
+              listing(4, "Parduodu iPhone 13 geros bukles", 210),
+              listing(5, "iPhone 14 pro 128gb black", 400)]
+        Run.mark_foreign(ls)
+        self.assertTrue(ls[0].skip_reason.startswith("kalba (PL"))
+        self.assertTrue(ls[1].skip_reason.startswith("kalba (PL"))
+        self.assertEqual([l.skip_reason for l in ls[2:]], ["", "", ""])
+
+    def test_foreign_prices_do_not_enter_market(self):
+        from vinted.finder import Run
+        m = Market()
+        ls = [listing(1, "iphone 13 Stan bardzo dobry", 90),
+              listing(2, "iPhone 13 128GB", 200)]
+        Run.mark_foreign(ls)
+        m.observe(ls, day=100)
+        self.assertIsNone(m.get("vinted:1"))
+        self.assertIsNotNone(m.get("vinted:2"))
+
+    def test_disabled_when_language_filter_off(self):
+        from vinted.finder import Run
+        rank_config(ONLY_LITHUANIAN_TEXT=False)
+        ls = [listing(1, "iphone 13 Stan bardzo dobry", 90)]
+        Run.mark_foreign(ls)
+        self.assertEqual(ls[0].skip_reason, "")
+
+
+class MarketTableTest(unittest.TestCase):
+    """Log'o lentele turi rodyti, ka kodas IS TIKRUJU naudoja."""
+
+    def test_used_column_matches_quote(self):
+        from vinted.finder import Run
+        from vinted.state import State
+        rank_config(MIN_SAMPLES=3, MIN_SOLD_SAMPLES=5, MARKET_PERCENTILE=0.5,
+                    ASKING_SALE_FACTOR=1.0, USE_TYPICAL_FALLBACK=False)
+        run = Run([], FakeTelegram())
+        run.state = State()
+        from vinted.util import today
+        fill(run.state.market, [50, 55, 60, 65], model="iPhone X 64GB", day=today())
+        # 2 pardavimai po 130 € – per mazai (reikia 5), kodas ju NENAUDOJA
+        fill(run.state.market, [130, 132], model="iPhone X 64GB", start=9000, day=today())
+        for uid in ("vinted:9000", "vinted:9001"):
+            run.state.market.set_status(uid, "sold", day=today())
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            run.print_market()
+        eilute = next(l for l in out.getvalue().splitlines() if "iPhone X " in l)
+        naudojama = float(eilute.split("naudojama:")[1].split("(")[0])
+        self.assertAlmostEqual(naudojama, run.state.market.quote("X", None).price, delta=1)
+        self.assertLess(naudojama, 100)                  # ne 131 kaip rode anksciau
+        self.assertIn("skelb.", eilute)

@@ -34,13 +34,53 @@ class QueriesTest(unittest.TestCase):
         self.assertEqual(source.queries(), ["iPhone 13", "iPhone 14"])
 
     def test_page_count(self):
-        vinted_defaults(PAGES=2, FULL_SCAN_PAGES=10,
-                        VINTED_BROWSE_PAGES=5, VINTED_FULL_SCAN_PAGES=25)
+        vinted_defaults(PAGES=2, FULL_SCAN_PAGES=10, VINTED_BROWSE_PAGES=5,
+                        VINTED_FULL_SCAN_PAGES=10, VINTED_MAX_PAGES=10)
         source = VintedSource(client=FakeClient({}))
         self.assertEqual(source.page_count(2), 5)         # iprastas paleidimas
-        self.assertEqual(source.page_count(10), 25)       # seen.json tuscias – giliau
+        self.assertEqual(source.page_count(10), 10)       # seen.json tuscias – giliau
         config.cfg["VINTED_BROWSE_ALL"] = False
         self.assertEqual(source.page_count(2), 2)         # raktazodziu veiksena – kaip buvo
+
+    def test_never_asks_beyond_vinted_limit(self):
+        """Gyvas log'as: 'iphone' p.11 -> HTTP 400 INVALID_REQUEST. Vinted giliau neleidzia."""
+        vinted_defaults(FULL_SCAN_PAGES=10, VINTED_FULL_SCAN_PAGES=25, VINTED_MAX_PAGES=10)
+        source = VintedSource(client=FakeClient({}))
+        self.assertEqual(source.page_count(10), 10)
+
+
+class PageLimitTest(unittest.TestCase):
+    """HTTP 400 po 10-o puslapio – saraso pabaiga, ne klaida."""
+
+    def test_400_after_first_page_ends_quietly(self):
+        from vinted.client import VintedClient
+        reset_config(SLEEP_SECONDS=0)
+
+        class Resp:
+            def __init__(self, code, data=None):
+                self.status_code, self._d = code, data
+                self.text = '{"code":"INVALID_REQUEST"}' if code == 400 else "{}"
+                self.headers, self.cookies, self.url = {}, {}, ""
+            def json(self):
+                return self._d
+
+        class Session:
+            def get(self, url, params=None, headers=None, timeout=None):
+                page = int((params or {}).get("page", 1))
+                if "catalog" not in url:
+                    return Resp(200)
+                if page >= 3:
+                    return Resp(400)
+                return Resp(200, {"items": [{"id": 900 - page * 10 - i, "title": "iPhone 13"}
+                                            for i in range(3)]})
+
+        client = VintedClient(session_factory=Session, sleep=lambda s: None)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            client.start()
+            items = client.fetch_items("iphone", pages=10)
+        self.assertEqual(len(items), 6)                   # 2 puslapiai, tada pabaiga
+        self.assertNotIn("INVALID_REQUEST", out.getvalue())   # jokio gasdinancio pranesimo
+        self.assertNotIn("400", client.last_error)
 
 
 class RequestCountTest(unittest.TestCase):
