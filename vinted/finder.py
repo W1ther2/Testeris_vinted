@@ -481,6 +481,7 @@ class Run:
         seen = load_seen()
         self.state = State.load(seen=seen)
         config.apply_overrides(self.state.overrides)
+        self.report_config_error()
         self.process_commands()
 
         self.new_seen = dict(seen)
@@ -526,6 +527,21 @@ class Run:
         save_seen(self.new_seen)
 
         print(f"Issiusta {len(self.alerts)} alert'u." if self.alerts else "Nauju deal'u nera.")
+
+    def report_config_error(self):
+        """Sugadintas config.json (pvz. dingo kablelis redaguojant GitHub'e) – botas veikia
+        su numatytaisiais nustatymais, bet apie tai pranesa (ne dazniau nei kas valanda)."""
+        if not config.load_error:
+            return
+        now = time.time()
+        if now - float(self.state.source_alerts.get("__config__") or 0) < 3600:
+            return
+        self.state.source_alerts["__config__"] = now
+        self.tg.send_message(
+            "⚠️ <b>config.json sugadintas</b> – kol kas naudoju numatytuosius nustatymus.\n"
+            f"Klaida: <code>{html.escape(config.load_error[:200])}</code>\n"
+            "<i>Dažniausiai trūksta kablelio eilutės gale arba kabutės. "
+            "Eilutės numeris nurodytas klaidoje (line …).</i>")
 
     def report_blocked_sources(self):
         """Kai vienas saltinis blokuojamas, o kitas veikia, bendras skaicius atrodo

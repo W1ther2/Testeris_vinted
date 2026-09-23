@@ -165,7 +165,13 @@ def condition_ok(condition, minimum):
 # (saknis be diakritiku, pavadinimas, vertes daugiklis). 0 = netinkamas (visada atmetama)
 DEFECT_PATTERNS = [
     (r"icloud", "iCloud užraktas", 0.0),
-    (r"uzblok\w*|blokuot\w*|\blocked\b|uzrakint\w*", "užblokuotas", 0.0),
+    # ir daznos rasybos klaidos: „uzbluokuotas“, „blukuotas“, „uzlockintas“, „lokintas“
+    (r"uzbl\w{0,3}k\w*|bl[aou]{1,2}kuot\w*|\blocked\b|uzrakint\w*|(?:uz)?loc?kint\w*",
+     "užblokuotas", 0.0),
+    # Be baterijos telefono neisbandysi. „be baterijos keitimo / problemu“ – ne tas pats.
+    (r"(?:be|nera|truksta|neturi|isimt\w*|no|without|missing) (?:akum\w*|baterij\w*|batarej\w*|battery)\b"
+     r"(?! (?:problem|keit|pakeit|bed|defekt|gedim|nusidev|susidev|sveikat|degrad|isnaud|issues?|replace|health)\w*)",
+     "be baterijos", 0.0),
     (r"dalims|for parts|parts only|detalem\w*|donor\w*", "dalims", 0.0),
     (r"(prasyt?\w*|praso|reikia|nezin\w*|pamirs\w*|ivesti|uzrakint\w*) (\w+ ){0,3}(kod\w*|slaptazod\w*|pin\w*)|"
      r"(kod\w*|slaptazod\w*) (\w+ ){0,3}(nezin\w*|pamirs\w*)|passcode|activation lock|aktyvacij\w* uzrakt\w*",
@@ -196,7 +202,8 @@ DEFECT_PATTERNS = [
 ]
 _DEFECT_RE = [(re.compile(r"\b(?:" + p + r")"), label, f) for p, label, f in DEFECT_PATTERNS]
 _NE_IS_DEFECT = {"kažkas neveikia", "neveikia Face ID", "neįsijungia / nesikrauna", "netestuotas",
-                 "užrakintas kodu", "ekrano gedimas", "neaiški kilmė"}
+                 "užrakintas kodu", "ekrano gedimas", "neaiški kilmė", "be baterijos"}
+_NEGATION_IS_DEFECT = {"be baterijos"}
 _NEGATE_BEFORE = {"be", "nera", "no", "not", "without", "jokiu", "jokio", "nieko", "neturi", "zero", "0"}
 # Zodziai PO defekto, kurie ji paneigia: "iCloud atristas", "iCloud paskyra bus atsieta".
 # Tokia formuluote lietuviskuose skelbimuose iprasta, todel ziurim kelis zodzius i prieki.
@@ -220,7 +227,11 @@ def find_defects(*texts):
             after = {w.strip(",.;:!-()") for w in
                      re.split(r"[.,;!?\n]", t[m.end():])[0].split()[:_NEGATE_AFTER_WORDS]}
             inside = set(t[m.start():m.end()].split())
-            if before & _NEGATE_BEFORE or after & _NEGATE_AFTER or inside & _NEGATE_BEFORE:
+            # „be akumo“ – pats „be“ ir yra defektas, tad cia paneigimo nebetikrinam
+            negation_is_defect = label in _NEGATION_IS_DEFECT
+            if not negation_is_defect and (before & _NEGATE_BEFORE or inside & _NEGATE_BEFORE):
+                continue
+            if after & _NEGATE_AFTER:
                 continue
             # "nesudaužytas", "neskilęs" = paneigimas; bet "neveikia", "neįsijungia" – pats defektas
             if label not in _NE_IS_DEFECT and t[m.start():m.end()].startswith("ne"):

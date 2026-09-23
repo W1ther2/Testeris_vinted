@@ -30,7 +30,7 @@ DEFAULTS = {
     # false = ieskoti kiekvieno modelio atskirai pagal SEARCH_QUERIES.
     "VINTED_BROWSE_ALL": True,
     "VINTED_QUERIES": ["iphone"],
-    "VINTED_BROWSE_PAGES": 5,        # po 96 skelb. = 480 naujausiu, iprastam paleidimui su kaupu
+    "VINTED_BROWSE_PAGES": 3,        # po 96 skelb. = ~290 naujausiu, iprastam paleidimui
     "VINTED_FULL_SCAN_PAGES": 10,    # pirmam paleidimui (seen.json tuscias)
     "VINTED_MAX_PAGES": 10,          # Vinted giliau neleidzia: 11-as puslapis = HTTP 400
 
@@ -123,7 +123,7 @@ DEFAULTS = {
     "TELEGRAM_COMMANDS": True,       # leisti keisti nustatymus komandomis Telegram'e
     # Kas gali keisti nustatymus. Tuscia = niekas (komandos grupeje ignoruojamos).
     # Savo ID suzinosi parases botui privaciai /start.
-    "ADMIN_IDS": [],
+    "ADMIN_IDS": [6157710734],
     "HEARTBEAT_HOURS": 24,
     "FAIL_ALERT_RUNS": 3,            # po kiek nesekmingu paleidimu is eiles pranesti apie problema
     "SOURCE_ALERT_HOURS": 12,        # kaip daznai pranesti apie blokuojama saltini (0 = kas karta)
@@ -170,9 +170,14 @@ _RENAMED = {"PRICE_HISTORY_MAX": None, "MIN_PRICE_RATIO": None}
 
 cfg = dict(DEFAULTS)
 
+# Jei config.json nepavyko perskaityti – kodel (pranesama Telegram'e, kad nelikt nepastebeta)
+load_error = ""
+
 
 def load(path=CONFIG_FILE):
     """Ikelia config.json i `cfg` (vietoje). Grazina cfg."""
+    global load_error
+    load_error = ""
     cfg.clear()
     cfg.update(json.loads(json.dumps(DEFAULTS)))
     if not os.path.exists(path):
@@ -189,6 +194,7 @@ def load(path=CONFIG_FILE):
         if unknown:
             print(f"  (nezinomi raktai ignoruojami: {', '.join(unknown)})")
     except Exception as e:
+        load_error = str(e)
         print(f"! Nepavyko nuskaityti {path} ({e}) – naudojami numatytieji.")
     return cfg
 
