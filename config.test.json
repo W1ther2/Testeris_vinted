@@ -102,8 +102,8 @@
     "LT",
     "EN"
   ],
-  "PAGES": 1,
-  "FULL_SCAN_PAGES": 2,
+  "PAGES": 3,
+  "FULL_SCAN_PAGES": 10,
   "SLEEP_SECONDS": 3,
   "DETAIL_SLEEP_SECONDS": 1.0,
   "DRY_RUN": false,
