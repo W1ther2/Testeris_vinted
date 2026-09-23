@@ -19,6 +19,9 @@ class Source:
     pages_multiplier = 1
     # Ar perkant imamas pirkejo apsaugos mokestis (Vinted – taip, Skelbiu – ne).
     buyer_protection_fee = True
+    # Ar `detail()` eina i tinkla. Kai saltinis aprasyma jau turi is saraso (JSON API),
+    # pauze po jo nereikalinga.
+    detail_needs_request = True
 
     def __init__(self):
         self.last_error = ""
