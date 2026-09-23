@@ -263,6 +263,7 @@ class Run:
         if not config.cfg["TELEGRAM_COMMANDS"]:
             return
         messages, callbacks, offset = self.tg.get_updates(self.state.telegram_offset)
+        told_setup = False
         for m in messages:
             if m["private"]:
                 reply = commands.handle_private(m, self.state)
@@ -273,9 +274,16 @@ class Run:
                 if reply:
                     print(f"Komanda ({m['name']}): {m['text'][:50]}")
                     self.tg.send_message(reply)
+            elif not config.cfg.get("ADMIN_IDS") and not told_setup:
+                # Administratorius dar nenustatytas – anksciau komanda buvo tyliai ignoruojama,
+                # ir savininkas nesuprasdavo, kodel botas neatsako. Pasakom, ka daryti
+                # (ir jo paties ID – tai nieko neatskleidzia apie kitus).
+                told_setup = True
+                print(f"Komanda neivykdyta – ADMIN_IDS tuscias ({m['name']}, ID {m['user']}): {m['text'][:40]}")
+                self.tg.send_message(commands.admin_setup_message(m["user"]))
             else:
                 # Grupeje komandos is kitu zmoniu ignoruojamos – nieko neatskleidziam
-                print(f"Ignoruota komanda grupeje ({m['name']}): {m['text'][:40]}")
+                print(f"Ignoruota komanda grupeje ({m['name']}, ID {m['user']}): {m['text'][:40]}")
         for cb in callbacks:
             answer = commands.handle_callback(cb, self.state)
             print(f"Mygtukas ({cb['name']}): {cb['data']} -> {answer[:40]}")

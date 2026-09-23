@@ -121,6 +121,16 @@ def is_admin(user_id):
     return str(user_id) in admins
 
 
+def admin_setup_message(user_id):
+    """Atsakymas, kai grupeje parasyta komanda, bet ADMIN_IDS dar tuscias."""
+    uid = user_id if str(user_id).isdigit() else "123456789"
+    return ("⚙️ <b>Komandos dar neįjungtos</b> – nenurodytas administratorius.\n"
+            f"Tavo Telegram ID: <code>{uid}</code>\n\n"
+            f"GitHub'e atidaryk <code>config.json</code>, surask eilutę "
+            f"<code>\"ADMIN_IDS\": []</code> ir pakeisk į <code>\"ADMIN_IDS\": [{uid}]</code>, "
+            f"tada Commit. Po to komandą parašyk dar kartą.")
+
+
 def handle_callback(cb, state):
     """Mygtuko paspaudimas. Atsakyma mato tik paspaudes vartotojas."""
     data = cb.get("data") or ""
