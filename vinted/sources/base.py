@@ -36,6 +36,10 @@ class Source:
         """Po visu paiesku: statistika i log'a (pvz. daznos kategorijos)."""
 
     # --- duomenys ---------------------------------------------------------
+    def page_count(self, pages):
+        """Kiek puslapiu imti siam saltiniui."""
+        return max(1, int(pages * self.pages_multiplier))
+
     def queries(self):
         """Paieskos frazes. Saltinis gali turėti savo (kitokia rasyba, kategorijos)."""
         return list(config.cfg["SEARCH_QUERIES"])

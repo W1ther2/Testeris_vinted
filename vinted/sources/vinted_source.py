@@ -23,6 +23,27 @@ class VintedSource(Source):
         self.catalog_ids = {}       # Vinted kategoriju ID -> kiek telefonu (filtrui nustatyti)
         self.brand_ids = {}
 
+    # --- ka ieskoti -------------------------------------------------------
+    @property
+    def browse_all(self):
+        return bool(config.cfg["VINTED_BROWSE_ALL"])
+
+    def queries(self):
+        """Viena paieska "iphone" grazina visus modelius – nuo 8 iki 17 Pro Max.
+        34 atskiros paieskos duoda ta pati, tik daro 30+ kartu daugiau uzklausu."""
+        return list(config.cfg["VINTED_QUERIES"]) if self.browse_all else super().queries()
+
+    def describe(self, query):
+        return f"'{query}' (visi modeliai)" if self.browse_all else f"'{query}'"
+
+    def page_count(self, pages):
+        """Narsant viena uzklausa galima eiti giliau – vis tiek liks kelios uzklausos."""
+        if not self.browse_all:
+            return max(1, pages)
+        c = config.cfg
+        pirmas_kartas = pages >= c["FULL_SCAN_PAGES"]
+        return c["VINTED_FULL_SCAN_PAGES"] if pirmas_kartas else c["VINTED_BROWSE_PAGES"]
+
     # --- gyvavimo ciklas --------------------------------------------------
     def start(self):
         self.client.start()
@@ -46,9 +67,14 @@ class VintedSource(Source):
         if url.startswith("/"):
             url = config.BASE + url
         user = raw.get("user") if isinstance(raw.get("user"), dict) else {}
+        total = raw.get("total_item_price")
+        if isinstance(total, dict) and (total.get("currency_code") or "EUR") == "EUR":
+            total = get_price({"price": total})       # kaina jau su pirkejo apsaugos mokesciu
+        else:
+            total = None
         return Listing(
             source=self.name, id=str(raw["id"]), title=raw.get("title") or "",
-            price=get_price(raw), url=url, photo=get_photo_url(raw),
+            price=get_price(raw), total_price=total, url=url, photo=get_photo_url(raw),
             condition=get_condition(raw),
             seller_id=str(user.get("id") or raw.get("user_id") or ""),
             seller=seller_from_dict(user), photo_count=get_photo_count(raw),
