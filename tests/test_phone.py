@@ -113,3 +113,25 @@ class SpecsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ICloudNegationTest(unittest.TestCase):
+    """Tikras Pirkpard skelbimas: „iCloud paskyra bus atsieta pries pardavima“.
+    Anksciau toks tvarkingas telefonas budavo atmetamas kaip uzrakintas."""
+
+    def setUp(self):
+        reset_config()
+
+    def blokuojantys(self, tekstas):
+        return [d for d, f in find_defects(tekstas) if f == 0]
+
+    def test_promise_to_unlink_is_not_a_defect(self):
+        self.assertEqual(self.blokuojantys("iCloud paskyra bus atsieta prieš pardavimą"), [])
+        self.assertEqual(self.blokuojantys("Parduodu tvarkingą, iCloud bus atrišta"), [])
+        self.assertEqual(self.blokuojantys("iCloud atrištas, viskas veikia"), [])
+
+    def test_real_lock_still_caught(self):
+        self.assertIn("iCloud užraktas",
+                      self.blokuojantys("iCloud užraktas, nežinau slaptažodžio"))
+        self.assertIn("iCloud užraktas",
+                      self.blokuojantys("Telefonas užrakintas, iCloud pririštas prie senos paskyros"))

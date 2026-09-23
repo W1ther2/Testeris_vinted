@@ -129,3 +129,69 @@ Turi minimalius pabrai&#382;ymus, visada buvo naudotas su d&#279;klais, baterijo
 # Istrintas / nebegaliojantis skelbimas
 SKELBIU_GONE = """<!DOCTYPE html><html><head><title>Puslapis nerastas - Skelbiu.lt</title></head>
 <body>Atsipra&#353;ome, ta&#269;iau tokio puslapio neradome.</body></html>"""
+
+
+# --- Pirkpard.lt: tikri /api/v1/products atsakymo irasai (2026-09-23) -------------
+# Palikti tik tie laukai, kuriuos naudoja parseris (be pardavejo el. pasto ir telefono).
+PIRKPARD_ITEMS = [
+    {   # iprastas, tvarkingas
+        "id": 3748, "handle": "iphone-14-pro-max-256-gb-vendor-2216",
+        "title": "iPhone 14 Pro Max, 256 GB.", "price": 430, "currency_code": "EUR",
+        "condition": "excellent", "is_used": True, "is_auction": False, "is_service": False,
+        "is_looking_for": False, "is_reserved": False, "is_active": True,
+        "sold_out": False, "marked_sold_at": None, "expired": False,
+        "created_at": "2026-09-23T09:05:58.000000Z", "city": ["Vilnius", "Visa Lietuva"],
+        "featured_image": "https://images.pirkpard.lt/products/AheBHFQ2.jpg",
+        "images": ["a.jpg", "b.jpg", "c.jpg", "d.jpg"],
+        "description": ("Parduodu tvarkingą iPhone 14 Pro Max, 256 GB. Telefonas veikia gerai.\r\n"
+                        "🔋 Battery Health: 78%\r\n🔐 iCloud paskyra bus atsieta prieš pardavimą"),
+        "vendor": {"id": 2216, "country": "LT", "is_verified": False,
+                   "average_rating": "0.00", "total_ratings": 0},
+    },
+    {   # parduotas
+        "id": 3645, "handle": "iphone-14-pro-vendor-2144",
+        "title": "Iphone 14 Pro", "price": 380, "currency_code": "EUR",
+        "condition": "excellent", "is_used": True, "is_auction": False, "is_service": False,
+        "is_looking_for": False, "is_reserved": False, "is_active": False,
+        "sold_out": True, "marked_sold_at": "2026-09-20T09:55:34.000000Z", "expired": False,
+        "created_at": "2026-09-19T13:11:28.000000Z", "city": ["Šiauliai", "Visa Lietuva"],
+        "featured_image": "https://images.pirkpard.lt/products/KtAVqo4M.jpg",
+        "images": ["a.jpg"] * 12,
+        "description": "Parduodamas iPhone 14 Pro (128GB, Deep Purple). Idealios būklės.",
+        "vendor": {"id": 2144, "country": "LT", "is_verified": False,
+                   "average_rating": "0.00", "total_ratings": 0},
+    },
+    {   # aukcionas – kaina reiskia pasiulyma, ne kaina
+        "id": 3368, "handle": "iphone-16pro-128gb-vendor-1958",
+        "title": "iPhone 16pro 128gb", "price": 680, "currency_code": "EUR",
+        "condition": "like_new", "is_used": True, "is_auction": True, "is_service": False,
+        "is_looking_for": False, "is_reserved": False, "is_active": True,
+        "sold_out": False, "marked_sold_at": None, "expired": False,
+        "created_at": "2026-09-09T16:00:58.000000Z", "city": ["Anykščiai", "Visa Lietuva"],
+        "featured_image": "https://images.pirkpard.lt/products/P3oLMiAC.jpg",
+        "images": ["a.jpg", "b.jpg", "c.jpg"],
+        "description": "📱 Parduodamas iPhone 16 Pro 128 GB. Labai tvarkingas ir prižiūrėtas.",
+        "vendor": {"id": 1958, "country": "LT", "is_verified": False,
+                   "average_rating": "0.00", "total_ratings": 0},
+    },
+    {   # dalims – tai ekranas, ne telefonas
+        "id": 651, "handle": "iphone-13-128gb-starlight-a2633-global-ekranas-vendor-2",
+        "title": "iPhone 13 128GB Starlight A2633 Global - EKRANAS", "price": 80,
+        "currency_code": "EUR", "condition": "for_parts", "is_used": True, "is_auction": False,
+        "is_service": False, "is_looking_for": False, "is_reserved": False, "is_active": True,
+        "sold_out": False, "marked_sold_at": None, "expired": False,
+        "created_at": "2026-05-07T21:39:14.000000Z", "city": ["Visa Lietuva"],
+        "featured_image": "https://images.pirkpard.lt/products/hoxBs57a.jpeg",
+        "images": ["a.jpg", "b.jpg", "c.jpg"],
+        "description": "Parduodu originalų iPhone 13 ekraną, bus išmontuotas iš korpuso.",
+        "vendor": {"id": 2, "country": "LT", "is_verified": False,
+                   "average_rating": "4.90", "total_ratings": 8},
+    },
+]
+
+
+def pirkpard_response(items=None, total=None, page=1, last_page=1):
+    items = PIRKPARD_ITEMS if items is None else items
+    return {"data": list(items),
+            "meta": {"current_page": page, "last_page": last_page,
+                     "per_page": 100, "total": total if total is not None else len(items)}}

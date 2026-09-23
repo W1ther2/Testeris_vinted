@@ -20,6 +20,16 @@ class MarketTest(unittest.TestCase):
         self.assertIsNone(m.get(2))
         self.assertIsNone(m.get(3))
 
+    def test_skipped_listings_never_enter_market(self):
+        """Aukciono pasiulymas ar dalies kaina nera rinkos kaina."""
+        m = Market()
+        geras = listing(1, "iPhone 13 128GB", 200)
+        aukcionas = listing(2, "iPhone 13 128GB", 90)
+        aukcionas.skip_reason = "aukcionas"
+        m.observe([geras, aukcionas], day=100)
+        self.assertIsNotNone(m.get("vinted:1"))
+        self.assertIsNone(m.get("vinted:2"))
+
     def test_quote_priority(self):
         m = Market()
         m.observe([listing(i, "iPhone 13 128GB", p) for i, p in enumerate([200, 220, 240], 1)], day=100)
