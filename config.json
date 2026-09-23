@@ -1,11 +1,17 @@
 {
   "SOURCES": [
     "vinted",
-    "skelbiu"
+    "pirkpard"
   ],
   "PARALLEL_SOURCES": true,
   "SKELBIU_BROWSE_ALL": true,
   "SKELBIU_IMPERSONATE": "",
+  "PIRKPARD_QUERIES": [
+    "iphone"
+  ],
+  "PIRKPARD_PER_PAGE": 100,
+  "PIRKPARD_SKIP_AUCTIONS": true,
+  "PIRKPARD_STATUS_PAGES": 3,
   "SEARCH_QUERIES": [
     "iPhone 8",
     "iPhone 8 Plus",

@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-iPhone deal finder v23.
+iPhone deal finder v25.
 
 Iesko iPhone 8 … 17 Pro Max, kurie pigesni uz rinkos kaina (ivertinus bukle,
 baterija ir defektus), ir siuncia juos i Telegram.
 
-Saltiniai ijungiami config.json rakte "SOURCES" (dabar: vinted, skelbiu). Naujas saltinis –
+Saltiniai ijungiami config.json rakte "SOURCES" (dabar: vinted, pirkpard; skelbiu paruostas, bet isjungtas). Naujas saltinis –
 vienas failas vinted/sources/, zr. README.
 
 Paleidimas:   python vinted_deal_finder.py
