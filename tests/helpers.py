@@ -12,8 +12,14 @@ from vinted import config
 
 
 def reset_config(**overrides):
+    """Numatytieji nustatymai testams.
+
+    VINTED_BROWSE_ALL cia isjungiamas, nes dauguma testu tikrina atrankos logika ir
+    paduoda savo SEARCH_QUERIES. Pati narsymo veiksena turi atskirus testus
+    (tests/test_vinted_browse.py)."""
     with contextlib.redirect_stdout(io.StringIO()):
         config.load("__nera__.json")
+    config.cfg["VINTED_BROWSE_ALL"] = False
     config.cfg.update(overrides)
 
 
