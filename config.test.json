@@ -22,6 +22,9 @@
     "iPhone 13",
     "iPhone 14 Pro"
   ],
+  "DEAL_MODE": "rank",
+  "RANK_TOP_PCT": 0.15,
+  "RANK_MIN_PEERS": 8,
   "MIN_DISCOUNT": 0.1,
   "HARD_MIN_PRICE_RATIO": 0.4,
   "SUSPICIOUS_PRICE_RATIO": 0.55,
