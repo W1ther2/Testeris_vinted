@@ -244,6 +244,27 @@ class FlowTest(unittest.TestCase):
             self.assertIn("<code>1</code>", setup[0])            # rasiusiojo ID
             self.assertEqual(config.cfg["RANK_TOP_PCT"], 0.15)   # nustatymas nepakeistas
 
+    def test_broken_config_reported_hourly(self):
+        """config.json sugadintas redaguojant – botas veikia ir apie tai pasako, bet ne kas 10 min."""
+        import os
+        from vinted.config import load
+        with TempDir():
+            with open("config.json", "w", encoding="utf-8") as f:
+                f.write('{\n  "ADMIN_IDS": [6157710734]\n  "PAGES": 2\n}')     # truksta kablelio
+            load("config.json")
+            self.assertIn("line 3", config.load_error)
+            config.cfg.update(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0,
+                              VINTED_BROWSE_ALL=False, DEAL_MODE="discount")
+            tg1, tg2 = FakeTelegram(), FakeTelegram()
+            run(FakeClient({"iPhone 13": []}), tg1)
+            run(FakeClient({"iPhone 13": []}), tg2)
+            self.assertEqual(len([m for m in tg1.messages if "config.json sugadintas" in m]), 1)
+            self.assertEqual([m for m in tg2.messages if "config.json sugadintas" in m], [])
+            with open("config.json", "w", encoding="utf-8") as f:
+                f.write('{"PAGES": 2}')
+            load("config.json")
+            self.assertEqual(config.load_error, "")
+
     def test_admin_configured_stranger_still_silent(self):
         reset_config(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0, ADMIN_IDS=["999"])
         with TempDir():
