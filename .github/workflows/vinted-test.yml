@@ -1,13 +1,12 @@
-name: Vinted deal finder
+name: Vinted deal finder (TESTAS)
 
+# Testinis paleidimas: kitas botas, kita grupe, atskiri seen/state failai.
+# Paleidziamas TIK ranka (Actions -> Vinted deal finder (TESTAS) -> Run workflow).
 on:
-  schedule:
-    - cron: "*/10 * * * *"      # kas 10 min (GitHub realiai gali veluoti)
-  workflow_dispatch:             # rankinis paleidimas
+  workflow_dispatch:
 
-# Du paleidimai vienu metu nevyks (kitaip ateitu dublikatai)
 concurrency:
-  group: vinted-finder
+  group: vinted-finder-test
   cancel-in-progress: false
 
 permissions:
@@ -16,7 +15,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       # Butinai naujausia sakos busena, o ne ta, kuri buvo paleidimo SUKURIMO metu:
       # eileje laukes paleidimas kitaip gautu sena seen.json ir siustu tuos pacius skelbimus.
@@ -37,30 +36,33 @@ jobs:
         continue-on-error: true
         run: python -m unittest discover -s tests -t .
 
-      - name: Paleisti
+      - name: Paleisti (testinis botas)
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+          BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
+          CONFIG_FILE: config.test.json
+          SEEN_FILE: seen.test.json
+          STATE_FILE: state.test.json
         run: python vinted_deal_finder.py
 
-      - name: Issaugoti busena
+      - name: Issaugoti testine busena
         if: always()
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
-          # Paleidimai vyksta po viena, tad sio paleidimo seen.json / state.json – naujausi.
+          # Paleidimai vyksta po viena, tad sio paleidimo seen.test.json / state.test.json – naujausi.
           # Imam naujausia saka (su tavo pakeitimais, pvz. config.json) ir uzdedam savo busena.
           # Anksciau „git pull --rebase“ konfliktas tyliai numesdavo visa busena.
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           mkdir -p /tmp/busena
-          for f in seen.json state.json; do [ -f "$f" ] && cp "$f" /tmp/busena/; done
+          for f in seen.test.json state.test.json; do [ -f "$f" ] && cp "$f" /tmp/busena/; done
           for i in 1 2 3 4 5; do
             git fetch origin "$BRANCH"
             git reset --hard "origin/$BRANCH"
-            for f in seen.json state.json; do [ -f "/tmp/busena/$f" ] && cp "/tmp/busena/$f" "$f" && git add "$f"; done
+            for f in seen.test.json state.test.json; do [ -f "/tmp/busena/$f" ] && cp "/tmp/busena/$f" "$f" && git add "$f"; done
             if git diff --cached --quiet; then echo "Busena nepasikeite"; break; fi
-            git commit -m "Atnaujinta busena"
+            git commit -m "Testine busena"
             if git push origin "HEAD:$BRANCH"; then echo "Busena issaugota"; break; fi
             echo "Nepavyko issaugoti ($i) – bandau dar karta"; sleep $((i * 5))
           done
