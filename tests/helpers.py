@@ -14,12 +14,13 @@ from vinted import config
 def reset_config(**overrides):
     """Numatytieji nustatymai testams.
 
-    VINTED_BROWSE_ALL cia isjungiamas, nes dauguma testu tikrina atrankos logika ir
-    paduoda savo SEARCH_QUERIES. Pati narsymo veiksena turi atskirus testus
-    (tests/test_vinted_browse.py)."""
+    VINTED_BROWSE_ALL ir DEAL_MODE="rank" cia isjungiami, nes dauguma testu tikrina
+    atrankos logika su savo SEARCH_QUERIES ir nuolaidos ribomis. Abi veiksenos turi
+    atskirus testus (tests/test_vinted_browse.py, tests/test_rank.py)."""
     with contextlib.redirect_stdout(io.StringIO()):
         config.load("__nera__.json")
     config.cfg["VINTED_BROWSE_ALL"] = False
+    config.cfg["DEAL_MODE"] = "discount"     # pigiausiu budas – tests/test_rank.py
     config.cfg.update(overrides)
 
 
