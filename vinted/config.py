@@ -114,6 +114,17 @@ DEFAULTS = {
 
     # --- Pelnas perpardavus ---
     "SHOW_PROFIT": True,
+    "SHOW_RANK": False,              # rodyti kortelej „12-as pigiausias iš 64 ...“ (atrankai naudojama visada)
+
+    # --- Rezultatu sekimas: ar praneseti skelbimai buvo nupirkti ir per kiek laiko ---
+    "TRACK_RESULTS": True,
+    "TRACK_DAYS": 7,                 # kiek dienu sekti kiekviena pranesima
+    "TRACK_FAST_HOURS": 48,          # pirmas 48 val. – tikrinti kas paleidima
+    "TRACK_MIN_MINUTES": 5,          # bet ne dazniau nei kas 5 min.
+    "TRACK_SLOW_EVERY_HOURS": 6,     # veliau – kas 6 val.
+    "TRACK_CHECKS_PER_RUN": 25,      # daugiausia patikrinimu per paleidima
+    "TRACK_KEEP_DAYS": 90,           # kiek laiko laikyti rezultatus
+    "REPORT_EVERY_DAYS": 7,          # automatine ataskaita Telegram'e (0 = nesiusti)
     "BUYER_FEE_FIXED": 0.70,         # Vinted pirkejo apsaugos mokestis (fiksuota dalis)
     "BUYER_FEE_PCT": 0.05,           # Vinted pirkejo apsaugos mokestis (procentai)
     "SHIPPING_COST": 3.5,            # siuntimo kaina perkant

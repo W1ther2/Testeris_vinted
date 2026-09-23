@@ -15,10 +15,11 @@ from .phone import (detect_model, is_accessory, find_defects, extract_storage, e
                     CONDITION_FACTOR, estimate_value, estimate_profit, MODEL_ORDER, condition_ok,
                     description_not_phone, min_price)
 from .risk import assess_risk, PICKUP_LABEL
-from .sources import build_sources
+from .sources import build_sources, label as source_label
 from .sources.vinted_source import VintedSource
 from .state import State, load_seen, save_seen
 from .telegram import Telegram
+from .tracker import report_text
 from .util import human_age
 
 
@@ -344,6 +345,73 @@ class Run:
             extra = " (dingusius laikom parduotais)" if config.cfg["GONE_AS_SOLD"] else ""
             print(f"Pardavimu patikra: parduota {found['sold']}, dingo {found['gone']}{extra}")
 
+    def track_results(self):
+        """Ar skelbimai, apie kuriuos pranesem, buvo nupirkti – ir per kiek laiko.
+        Pirmas 2 paras tikrinama kas paleidima, tad laikas tikslus ~10 min."""
+        if not config.cfg["TRACK_RESULTS"]:
+            return
+        tracker = self.state.tracker
+        tracker.expire()
+        by_name = {s.name: s for s in self.sources}
+        groups = {}
+        for uid in tracker.due():
+            source_name, local_id = split_uid(uid)
+            if source_name in by_name:
+                groups.setdefault(source_name, []).append((uid, local_id))
+        if not groups:
+            return
+        found = {}
+
+        def check(source_name, items):
+            source = by_name[source_name]
+            for uid, local_id in items:
+                if self.out_of_time():
+                    break
+                st = source.status(local_id, tracker.items.get(uid, {}).get("u"))
+                with self.lock:
+                    tracker.update(uid, st)
+                    if st in ("sold", "reserved", "gone"):
+                        found[st] = found.get(st, 0) + 1
+                        e = tracker.items[uid]
+                        print(f"  Rezultatas: iPhone {e.get('m')} {e.get('p', 0):.0f} EUR – {st} "
+                              f"po {(e['e'] - e['t']) / 60:.0f} min.")
+                if getattr(source, "detail_needs_request", True):
+                    self.sleep(config.cfg["DETAIL_SLEEP_SECONDS"])
+
+        workers = [(n, items) for n, items in groups.items()]
+        if config.cfg["PARALLEL_SOURCES"] and len(workers) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(workers)) as pool:
+                futures = {pool.submit(check, n, items): n for n, items in workers}
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"! Rezultatu patikra ({futures[future]}) nutruko: {e}")
+        else:
+            for n, items in workers:
+                try:
+                    check(n, items)
+                except Exception as e:
+                    print(f"! Rezultatu patikra ({n}) nutruko: {e}")
+        checked = sum(len(i) for _, i in workers)
+        print(f"Pranesimu rezultatai: patikrinta {checked}"
+              + (", " + ", ".join(f"{k} {v}" for k, v in found.items()) if found else ""))
+
+    def send_report(self):
+        """Kas REPORT_EVERY_DAYS – ataskaita Telegram'e: kiek pranestu nupirkta ir per kiek."""
+        days = config.cfg["REPORT_EVERY_DAYS"]
+        if not days or not config.cfg["TRACK_RESULTS"]:
+            return
+        now = time.time()
+        if not self.state.last_report:
+            self.state.last_report = now          # laikrodis pradedamas – pirma ataskaita po savaites
+            return
+        if now - self.state.last_report < days * 86400:
+            return
+        self.state.last_report = now
+        labels = {name: source_label(name) for name in config.cfg["SOURCES"]}
+        self.tg.send_message(report_text(self.state.tracker, days=days, labels=labels))
+
     def rotated(self, queries):
         """Kiekviena paleidima pradedam nuo kito modelio – kad tie patys nebutu
         visada tikrinami paskutiniai (ir apie ju dealus suzinotum veliausiai)."""
@@ -411,6 +479,8 @@ class Run:
                 with self.lock:
                     self.alerts.append(deal)
                     self.state.market.mark_alerted(deal["id"], deal["price"])
+                    if c["TRACK_RESULTS"]:
+                        self.state.tracker.add(deal)
                     rank = deal.get("rank")
                     # Pigiausiu budu garsiai – tik pats pigiausias (nuolaida cia remiasi
                     # ta pacia spejama verte, kuria ir nepasitikim)
@@ -498,6 +568,13 @@ class Run:
         if c["ROTATE_QUERIES"] and queries:
             start = self.state.query_offset % len(queries)
             self.state.query_offset = (start + max(1, len(queries) // 3)) % len(queries)
+
+        try:
+            self.track_results()
+            self.send_report()
+        except Exception as e:                       # statistika neturi sustabdyti boto
+            print(f"! Rezultatu sekimas nepavyko: {e}")
+            print(traceback.format_exc())
 
         if c["USE_SOLD_PRICES"]:
             self.check_sold()

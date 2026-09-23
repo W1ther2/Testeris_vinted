@@ -20,6 +20,7 @@ HELP = """<b>Komandos</b>
 /pelnas ne – nerodyti galimo pelno kortelėje
 /tvarkingi taip|ne – tik tvarkingi telefonai
 /pauze – nesiųsti skelbimų, /testi – vėl siųsti
+/rezultatai – kiek pranešimų nupirkta ir per kiek laiko (/rezultatai 30 – per 30 d.)
 /statistika – kodėl atmesti skelbimai (paskutinis paleidimas)
 /tikslumas – kiek vertinimas atitinka realias pardavimo kainas
 /kalibruoti taip|ne – ar taisyti vertinimą automatiškai
@@ -227,6 +228,14 @@ def handle(text, state):
             prices[key] = price
             _set(state, "MARKET_PRICES", prices)
             return f"✅ {name}: rinkos kaina {price:.0f} €"
+
+        if cmd in ("rezultatai", "rezultatas", "results"):
+            from .tracker import report_text
+            from .sources import label
+            days = int(args) if args.strip().isdigit() else 7
+            days = max(1, min(days, config.cfg["TRACK_KEEP_DAYS"]))
+            labels = {n: label(n) for n in config.cfg["SOURCES"]}
+            return report_text(state.tracker, days=days, labels=labels)
 
         if cmd in ("statistika", "stats"):
             return _stats_text(state)

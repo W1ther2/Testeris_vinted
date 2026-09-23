@@ -7,6 +7,7 @@ import time
 
 from . import config
 from .market import Market, migrate_old_prices
+from .tracker import Tracker
 
 
 def seen_key(key):
@@ -77,6 +78,9 @@ class State:
         self.users = data.get("users") or {}
         # {saltinio vardas: kada paskutini karta pranesta apie blokavima}
         self.source_alerts = data.get("source_alerts") or {}
+        # Pranesimu rezultatai (ar nupirkta ir per kiek) – zr. tracker.py
+        self.tracker = Tracker(data.get("tracked"))
+        self.last_report = float(data.get("last_report") or 0)
 
     @classmethod
     def load(cls, path=None, old_prices_path=None, seen=None):
@@ -123,6 +127,7 @@ class State:
                 "telegram_offset": self.telegram_offset,
                 "overrides": self.overrides, "heartbeat": self.heartbeat, "last_run": self.last_run,
                 "fail_streak": self.fail_streak, "query_offset": self.query_offset,
-                "users": self.users, "source_alerts": self.source_alerts}
+                "users": self.users, "source_alerts": self.source_alerts,
+                "tracked": self.tracker.to_dict(), "last_report": self.last_report}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))

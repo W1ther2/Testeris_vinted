@@ -26,7 +26,7 @@ def format_card(d):
     if d.get("drop_from"):
         lines.append(f"📉 <b>Atpigo:</b> {d['drop_from']:g} € → {d['price']:g} €")
     r = d.get("rank")
-    if r is not None:
+    if r is not None and config.cfg.get("SHOW_RANK"):
         # Pagrindinis argumentas – vieta tarp dabar parduodamu. Ji nepriklauso nuo to,
         # ar musu rinkos kainos spejimas teisingas.
         vieta = "Pigiausias" if r.place == 1 else f"{r.place}-as pigiausias"
@@ -34,6 +34,7 @@ def format_card(d):
                else f"iPhone {html.escape(d['model'])}")
         lines.append(f"🏷 <b>{vieta} iš {r.n}</b> dabar parduodamų {kas} "
                      f"({r.low:.0f}–{r.high:.0f} €)")
+    if r is not None:
         if d["discount"] > 0:
             lines.append(f"💰 ~{d['discount']:.0%} pigiau nei vertinta (~{d['value']:.0f} €)")
     else:
