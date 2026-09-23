@@ -32,6 +32,11 @@ DEFAULTS = {
     # Narsykles parasas Skelbiu (curl_cffi). Tuscia = bandom kelis is eiles ir
     # naudojam ta, kuris praeina. Pvz. "chrome131".
     "SKELBIU_IMPERSONATE": "",
+    # Pirkpard: JSON API, aprasymas ateina kartu su sarasu, tad uzteks vienos uzklausos.
+    "PIRKPARD_QUERIES": ["iphone"],
+    "PIRKPARD_PER_PAGE": 100,
+    "PIRKPARD_SKIP_AUCTIONS": True,   # aukcione kaina reiskia dabartini pasiulyma, ne kaina
+    "PIRKPARD_STATUS_PAGES": 3,       # kiek puslapiu perziureti tikrinant, kas parduota
 
     # --- Ka ieskoti ---
     "SEARCH_QUERIES": [

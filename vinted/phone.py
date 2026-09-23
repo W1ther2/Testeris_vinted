@@ -198,8 +198,15 @@ _DEFECT_RE = [(re.compile(r"\b(?:" + p + r")"), label, f) for p, label, f in DEF
 _NE_IS_DEFECT = {"kažkas neveikia", "neveikia Face ID", "neįsijungia / nesikrauna", "netestuotas",
                  "užrakintas kodu", "ekrano gedimas", "neaiški kilmė"}
 _NEGATE_BEFORE = {"be", "nera", "no", "not", "without", "jokiu", "jokio", "nieko", "neturi", "zero", "0"}
-_NEGATE_AFTER = {"atristas", "atrista", "atsietas", "laisvas", "isjungtas", "nera", "free", "off",
-                 "clean", "unlocked", "nepriristas", "neprisietas", "atrakintas", "atrakinta"}
+# Zodziai PO defekto, kurie ji paneigia: "iCloud atristas", "iCloud paskyra bus atsieta".
+# Tokia formuluote lietuviskuose skelbimuose iprasta, todel ziurim kelis zodzius i prieki.
+_NEGATE_AFTER = {"atristas", "atrista", "atrista", "atrisiu", "atrisamas",
+                 "atsietas", "atsieta", "atsiesiu", "atsiejamas",
+                 "laisvas", "isjungtas", "isjungta", "nera", "free", "off",
+                 "clean", "unlocked", "nepriristas", "neprisietas",
+                 "atrakintas", "atrakinta", "pasalintas", "pasalinta",
+                 "islogintas", "isloginta", "removed"}
+_NEGATE_AFTER_WORDS = 4
 
 
 def find_defects(*texts):
@@ -210,7 +217,8 @@ def find_defects(*texts):
         for m in rx.finditer(t):
             clause = re.split(r"[.,;!?\n]|\bbet\b|\bbut\b", t[:m.start()])[-1]
             before = {w.strip(",.;:!-()") for w in clause.split()[-4:]}
-            after = {w.strip(",.;:!-()") for w in re.split(r"[.,;!?\n]", t[m.end():])[0].split()[:2]}
+            after = {w.strip(",.;:!-()") for w in
+                     re.split(r"[.,;!?\n]", t[m.end():])[0].split()[:_NEGATE_AFTER_WORDS]}
             inside = set(t[m.start():m.end()].split())
             if before & _NEGATE_BEFORE or after & _NEGATE_AFTER or inside & _NEGATE_BEFORE:
                 continue

@@ -23,6 +23,9 @@ class Listing:
     seller: dict = field(default_factory=dict)
     photo_count: int = None
     created_at: float = None          # unix laikas, kada skelbimas ikeltas
+    # Kai saltinis jau is saraso mato, kad skelbimas netinka (aukcionas, dalims,
+    # rezervuotas), cia irasoma priezastis – ji pateks i atmetimu statistika.
+    skip_reason: str = ""
     raw: dict = field(default_factory=dict)
 
     @property

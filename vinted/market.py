@@ -86,6 +86,10 @@ class Market:
         day = day if day is not None else today()
         drops, quotes = {}, {}
         for l in listings:
+            # Aukcione kaina reiskia dabartini pasiulyma, dalyse – detales kaina,
+            # rezervuotas nebeparduodamas. Tokie skaiciai rinkos kainos nerodo.
+            if l.skip_reason:
+                continue
             title = l.title or ""
             model = detect_model(title)
             price = l.price

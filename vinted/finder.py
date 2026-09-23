@@ -75,6 +75,11 @@ class Run:
                 return self.reject("jau matyti")
             drop_from = prev
 
+        if listing.skip_reason:
+            # Saltinis jau is saraso zino, kad netinka – nebegaistam skelbimo puslapiui
+            self.new_seen[uid] = time.time()
+            return self.reject(listing.skip_reason, title[:45])
+
         model = detect_model(title)
         if model and hasattr(source, "note_ids"):
             source.note_ids(listing)      # renkam ID tik tikriems telefonams – pagal juos nustatysim filtra
@@ -113,7 +118,8 @@ class Run:
 
         # 2) Skelbimo puslapis
         detail = source.detail(listing)
-        self.sleep(c["DETAIL_SLEEP_SECONDS"])
+        if getattr(source, "detail_needs_request", True):
+            self.sleep(c["DETAIL_SLEEP_SECONDS"])
         if detail.status in ("sold", "gone"):
             self.state.market.set_status(uid, detail.status)
             return self.reject("jau parduotas" if detail.status == "sold" else "skelbimo nebėra")
