@@ -6,6 +6,7 @@ import time
 import unittest
 
 from tests.helpers import reset_config, TempDir, item
+from vinted import config
 from vinted.finder import Run
 
 
@@ -231,6 +232,24 @@ class FlowTest(unittest.TestCase):
             tg = FakeTelegram(updates=[(5, "/pagalba")])       # rasys ne adminas (user "1")
             run(FakeClient({"iPhone 13": []}), tg)
             self.assertEqual([m for m in tg.messages if "/kaina" in m], [])
+
+    def test_no_admin_configured_explains_setup(self):
+        """Gyvas atvejis: ADMIN_IDS tuscias, /pigiausi 25 tyliai ignoruota – savininkas nesuprato kodel."""
+        reset_config(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0, ADMIN_IDS=[])
+        with TempDir():
+            tg = FakeTelegram(updates=[(5, "/statistika"), (6, "/pigiausi 25")])
+            run(FakeClient({"iPhone 13": []}), tg)
+            setup = [m for m in tg.messages if "ADMIN_IDS" in m]
+            self.assertEqual(len(setup), 1)                     # vienas paaiskinimas, ne du
+            self.assertIn("<code>1</code>", setup[0])            # rasiusiojo ID
+            self.assertEqual(config.cfg["RANK_TOP_PCT"], 0.15)   # nustatymas nepakeistas
+
+    def test_admin_configured_stranger_still_silent(self):
+        reset_config(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0, ADMIN_IDS=["999"])
+        with TempDir():
+            tg = FakeTelegram(updates=[(5, "/pigiausi 25")])
+            run(FakeClient({"iPhone 13": []}), tg)
+            self.assertEqual([m for m in tg.messages if "ADMIN_IDS" in m], [])
 
     def test_time_limit_stops_run(self):
         reset_config(SEARCH_QUERIES=["A", "B", "C"], HEARTBEAT_HOURS=0, MAX_RUN_MINUTES=1e-9)
