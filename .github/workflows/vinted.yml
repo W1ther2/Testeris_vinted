@@ -37,8 +37,10 @@ jobs:
 
       - name: Paleisti
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+          # GitHub Secrets: BOT – bot'o token'as is @BotFather, TEL – grupes chat ID.
+          # Kodas juos gauna kaip BOT_TOKEN ir CHAT_ID (vinted/config.py).
+          BOT_TOKEN: ${{ secrets.BOT }}
+          CHAT_ID: ${{ secrets.TEL }}
         run: python vinted_deal_finder.py
 
       - name: Issaugoti busena
