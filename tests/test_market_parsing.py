@@ -2,7 +2,7 @@ import unittest
 
 from tests.helpers import reset_config, item, listing
 from vinted import config
-from vinted.market import Market, migrate_old_prices
+from vinted.market import Market
 from vinted.parsing import get_price, get_condition, listing_status, seller_from_dict
 
 
@@ -85,10 +85,10 @@ class MarketTest(unittest.TestCase):
         self.assertTrue(m.already_alerted_at(1, 195))
         self.assertFalse(m.already_alerted_at(1, 185))
 
-    def test_prune_and_migrate(self):
+    def test_prune(self):
         reset_config(PRICE_HISTORY_DAYS=30)
-        m = migrate_old_prices({"13|*": {"5": [200, 10]}, "13|128 GB": {"5": [200, 10]}})
-        self.assertEqual(m.get(5)["s"], "128 GB")
+        m = Market()
+        m.items["vinted:5"] = {"m": "13", "s": "128 GB", "p": 200, "f": 10, "l": 10, "c": 10, "st": "active"}
         m.prune(day=100)
         self.assertEqual(m.items, {})
 

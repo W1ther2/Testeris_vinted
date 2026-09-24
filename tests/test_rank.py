@@ -109,12 +109,12 @@ class InflatedMedianTest(unittest.TestCase):
 class FlowTest(unittest.TestCase):
     def setUp(self):
         rank_config(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0, MIN_SAMPLES=8,
-                    MARKET_PERCENTILE=0.5, MIN_BATTERY=0)
+                    MARKET_PERCENTILE=0.5, MIN_BATTERY=0, MIN_PROFIT_EUR=0)
 
     def test_cheapest_sent_loud_others_silent(self):
         with TempDir():
             katalogas = market_items() + [
-                item(1, "iPhone 13 128GB", 150, user_id=1),   # pigiausias
+                item(1, "iPhone 13 128GB", 205, user_id=1),   # pigiausias (ne itartinai)
                 item(2, "iPhone 13 128GB", 258, user_id=2),   # tarp pigiausiu, bet ne 1-as
                 item(3, "iPhone 13 128GB", 330, user_id=3),   # brangus
             ]
@@ -150,8 +150,25 @@ class FlowTest(unittest.TestCase):
 
 
 class CardTest(unittest.TestCase):
+    def test_rank_line_hidden_by_default(self):
+        """Prekiautojui vieta sarase nereikalinga – kortelej jos nerodom (atrankai naudojama)."""
+        rank_config()
+        from vinted.market import Quote, Rank
+        from vinted.telegram import format_card
+        card = format_card({
+            "model": "8", "storage": None, "price": 45.0, "discount": 0.11,
+            "value": 50.0, "description": "", "quote": Quote(56, 6, "parduoti", False),
+            "defects": [], "condition": "Gera", "battery": None, "seller": {},
+            "url": "https://www.vinted.lt/items/1",
+            "rank": Rank(place=12, n=64, low=40, high=99, share=0.17, by_storage=False)})
+        self.assertNotIn("pigiausias iš", card)
+        self.assertNotIn("dabar parduodamų", card)
+        self.assertIn("iPhone 8 | 45 €", card)
+        self.assertIn("~11% pigiau nei vertinta", card)
+
     def test_card_explains_why(self):
         rank_config()
+        config.cfg["SHOW_RANK"] = True
         from vinted.market import Quote, Rank
         from vinted.telegram import format_card
         card = format_card({
@@ -167,6 +184,7 @@ class CardTest(unittest.TestCase):
     def test_card_without_positive_discount_hides_it(self):
         """Isputa mediana gali sakyti „brangiau nei verte“ – tokio melo nerodome."""
         rank_config()
+        config.cfg["SHOW_RANK"] = True
         from vinted.market import Quote, Rank
         from vinted.telegram import format_card
         card = format_card({
@@ -199,6 +217,47 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(config.cfg["DEAL_MODE"], "discount")
         self.assertIn("pigiausių", commands.handle("/rezimas pigiausi", state))
         self.assertEqual(config.cfg["DEAL_MODE"], "rank")
+
+
+class SuspiciousAndProfitTest(unittest.TestCase):
+    """Tikras atvejis: „iPhone 14 – Užbluokuotas be akumo“ už 130 €, kai kiti nuo ~200 €."""
+
+    def setUp(self):
+        rank_config(SEARCH_QUERIES=["iPhone 13"], HEARTBEAT_HOURS=0, MIN_SAMPLES=8,
+                    MARKET_PERCENTILE=0.5, MIN_BATTERY=0, MIN_PROFIT_EUR=0,
+                    SUSPICIOUS_REJECT_RATIO=0.60, SUSPICIOUS_WARN_RATIO=0.75)
+
+    def run_with(self, price):
+        with TempDir():
+            katalogas = market_items() + [item(1, "iPhone 13 128GB", price, user_id=1)]
+            tg = FakeTelegram()
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                Run(FakeClient({"iPhone 13": katalogas}), tg, sleep=lambda s: None).run()
+            sent = {d["id"]: d for d, _ in tg.deals}
+            return sent.get("vinted:1"), out.getvalue()
+
+    def test_far_below_everyone_rejected(self):
+        deal, log = self.run_with(140)          # kitas pigiausias 260 -> 54%
+        self.assertIsNone(deal, log)
+        self.assertIn("įtartinai pigu", log)
+
+    def test_noticeably_cheaper_sent_with_warning(self):
+        deal, log = self.run_with(180)          # 69% kito pigiausio
+        self.assertIsNotNone(deal, log)
+        self.assertAlmostEqual(deal["suspicious"]["ratio"], 180 / 260, places=3)
+        from vinted.telegram import format_card
+        self.assertIn("Įtartinai pigu", format_card(deal))
+
+    def test_normal_cheapest_no_warning(self):
+        deal, log = self.run_with(230)          # 88% – iprastas pigiausias
+        self.assertIsNotNone(deal, log)
+        self.assertNotIn("suspicious", deal)
+
+    def test_min_profit(self):
+        config.cfg["MIN_PROFIT_EUR"] = 1000
+        deal, log = self.run_with(230)
+        self.assertIsNone(deal)
+        self.assertIn("per mažas pelnas", log)
 
 
 if __name__ == "__main__":

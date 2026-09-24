@@ -380,10 +380,13 @@ class FlowTest(unittest.TestCase):
                 tg = FakeTelegram()
                 run(FakeClient({}), tg)
             self.assertTrue(any("ISPEJIMAS" in m for m in tg.messages))
-            self.assertEqual(read_json("state.json")["fail_streak"], 0)
-            tg = FakeTelegram()
-            run(FakeClient({}), tg)
-            self.assertFalse(any("ISPEJIMAS" in m for m in tg.messages))
+            self.assertEqual(read_json("state.json")["source_zero"]["vinted"], 3)
+            # kartojama ne kas 3 paleidimus (anksciau ~48 kartus per para), o ne dazniau
+            # nei kas SOURCE_ALERT_HOURS
+            for _ in range(3):
+                tg = FakeTelegram()
+                run(FakeClient({}), tg)
+                self.assertFalse(any("ISPEJIMAS" in m for m in tg.messages))
             tg2 = FakeTelegram()
             run(FakeClient({}), tg2)
             self.assertFalse(any("Skriptas veikia" in m for m in tg2.messages))
