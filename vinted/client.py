@@ -144,6 +144,8 @@ class VintedClient:
                     self.last_error = f"HTTP {code} ({short}): {short_body(resp.text)}"
                     backoff = config.cfg["BLOCK_BACKOFF_SECONDS"]
                     pause = backoff[min(attempt - 1, len(backoff) - 1)]
+                    if attempt == max_retries:
+                        break                       # paskutinis bandymas – laukti nebera prasmes
                     print(f"  ! {code} – Vinted blokuoja, laukiu {pause}s "
                           f"(bandymas {attempt}/{max_retries})...")
                     self.sleep(pause)
@@ -152,12 +154,14 @@ class VintedClient:
                     continue
                 if code == 429:
                     self.last_error = f"HTTP 429 ({short}): per daug uzklausu"
-                    print(f"  ! 429 per daug uzklausu – laukiu {wait * attempt * 2}s...")
-                    self.sleep(wait * attempt * 2)
+                    if attempt < max_retries:
+                        print(f"  ! 429 per daug uzklausu – laukiu {wait * attempt * 2}s...")
+                        self.sleep(wait * attempt * 2)
                     continue
                 if code >= 500:
                     self.last_error = f"HTTP {code} ({short}): serverio klaida"
-                    self.sleep(wait * attempt)
+                    if attempt < max_retries:
+                        self.sleep(wait * attempt)
                     continue
                 if code == 400 and page > 1:
                     # Vinted leidzia ne daugiau ~10 puslapiu (960 skelb.). Toliau – 400
@@ -181,7 +185,8 @@ class VintedClient:
             except Exception as e:
                 self.last_error = f"Tinklo/JSON klaida ({short}): {e}"
                 print(f"  ! {self.last_error} (bandymas {attempt}/{max_retries})")
-                self.sleep(wait * attempt)
+                if attempt < max_retries:
+                    self.sleep(wait * attempt)
         return None
 
     def filter_params(self):

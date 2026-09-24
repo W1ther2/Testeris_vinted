@@ -4,6 +4,7 @@
 import html
 import json
 import re
+import time
 
 import requests
 
@@ -11,13 +12,37 @@ from . import config
 from .parsing import COUNTRY_LT
 
 
+def _retry_after(response, default=5.0):
+    """Kiek sekundziu laukti pagal Telegram 429 atsakyma (parameters.retry_after)."""
+    try:
+        return min(60.0, float(response.json()["parameters"]["retry_after"]) + 0.5)
+    except Exception:
+        return default
+
+
+def plain_text(text):
+    """HTML -> paprastas tekstas (kai Telegram HTML neperskaito)."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text or ""))
+
+
 def _stars(score):
     full = int(round(score or 0))
     return "★" * full + "☆" * (5 - full)
 
 
-def format_card(d):
-    """Korteles tekstas (HTML, iki 1024 simboliu – nuotraukos aprasymo riba)."""
+CAPTION_LIMIT = 1024          # Telegram nuotraukos aprasymo riba
+GROUP_MIN_INTERVAL = 3.1      # grupeje Telegram leidzia ne daugiau 20 zinuciu per minute
+
+
+def _short(text, limit):
+    if len(text) <= limit:
+        return text
+    cut = text[:max(0, limit)].rsplit(" ", 1)[0]
+    return (cut + " ...") if cut else ""
+
+
+def _card(d, desc, reasons, hidden_reasons, dropped):
+    """Viena korteles versija. `dropped` – nebutinos eilutes, kuriu siai versijai nededam."""
     name = f"iPhone {d['model']}" + (f" {d['storage']}" if d.get("storage") else "")
     icons = {"didelė": "🚩 ", "vidutinė": "⚠️ "}.get(d.get("risk_level"), "")
     if d.get("drop_from"):
@@ -26,7 +51,7 @@ def format_card(d):
     if d.get("drop_from"):
         lines.append(f"📉 <b>Atpigo:</b> {d['drop_from']:g} € → {d['price']:g} €")
     r = d.get("rank")
-    if r is not None and config.cfg.get("SHOW_RANK"):
+    if r is not None and config.cfg.get("SHOW_RANK") and "rank" not in dropped:
         # Pagrindinis argumentas – vieta tarp dabar parduodamu. Ji nepriklauso nuo to,
         # ar musu rinkos kainos spejimas teisingas.
         vieta = "Pigiausias" if r.place == 1 else f"{r.place}-as pigiausias"
@@ -39,28 +64,29 @@ def format_card(d):
             lines.append(f"💰 ~{d['discount']:.0%} pigiau nei vertinta (~{d['value']:.0f} €)")
     else:
         lines.append(f"💰 <b>{d['discount']:.0%} pigiau nei vertė</b> (~{d['value']:.0f} €)")
+    sus = d.get("suspicious")
+    if sus and "suspicious" not in dropped:
+        lines.append(f"⚠️ <b>Įtartinai pigu:</b> {1 - sus['ratio']:.0%} pigiau už kitą pigiausią "
+                     f"({sus['peer_low']:.0f} €) – patikrink, ar veikia ir ar ne užrakintas")
     if config.cfg["SHOW_PROFIT"] and d.get("profit") is not None:
         if d["profit"] > 0:
             lines.append(f"💵 <b>Galimas pelnas:</b> ~{d['profit']:.0f} € (perpardavus už ~{d['value']:.0f} €)")
         else:
             lines.append("💵 Perpardavus pelno greičiausiai nebūtų")
-
-    desc = re.sub(r"\s+", " ", d.get("description") or "").strip()
-    if len(desc) > 160:
-        desc = desc[:160].rsplit(" ", 1)[0] + " ..."
     if desc:
         lines.append(html.escape(desc))
     lines.append("")
 
     if d.get("risk_level"):
         icon = {"didelė": "🚩", "vidutinė": "⚠️", "maža": "ℹ️"}[d["risk_level"]]
-        lines.append(f"{icon} <b>Rizika: {d['risk_level']}</b> – {html.escape('; '.join(d['risk_reasons']))}")
+        more = f" (+{hidden_reasons} kt.)" if hidden_reasons else ""
+        lines.append(f"{icon} <b>Rizika: {d['risk_level']}</b> – {html.escape('; '.join(reasons))}{more}")
     q = d["quote"]
     basis = d["storage"] if q.by_storage else "visos talpos"
     source = {"rankinė": "nustatyta ranka", "parduoti": f"{q.samples} parduotų",
               "skelbimai": f"{q.samples} skelb.", "apytikslė": "apytikslė – mažai duomenų"}[q.source]
-    lines.append(f"📊 <b>Rinkos kaina:</b> {q.price:.0f} € ({html.escape(basis)}, {source})")
-    if d.get("defects"):
+    lines.append(f"📊 <b>Rinkos kaina:</b> {q.price:.0f} € ({html.escape(basis or '')}, {source})")
+    if d.get("defects") and "defects" not in dropped:
         lines.append(f"⚠️ <b>Defektai:</b> {html.escape(', '.join(d['defects']))}")
     lines.append(f"📦 <b>Būklė:</b> {html.escape(d.get('condition') or 'nenurodyta')}")
     if d.get("battery"):
@@ -69,28 +95,93 @@ def format_card(d):
     else:
         lines.append("🔋 <b>Baterija:</b> nenurodyta")
     s = d.get("seller") or {}
-    if s.get("rating") is not None and s.get("reviews") is not None:
+    if s.get("rating") is not None and s.get("reviews") is not None and "seller" not in dropped:
         extra = f", pardavė {s['sold']}" if s.get("sold") is not None else ""
         lines.append(f"⭐ <b>Pardavėjas:</b> {_stars(s['rating'])} ({s['rating']:.1f}/5, "
                      f"{s['reviews']} atsiliep.{extra})")
-    if s.get("country"):
+    if s.get("country") and "place" not in dropped:
         place = COUNTRY_LT.get(s["country"], s["country"]) + (f", {s['city']}" if s.get("city") else "")
         lines.append(f"📍 <b>Vieta:</b> {html.escape(place)}")
     where = d.get("source_label") or "Vinted"
-    if d.get("age"):
-        extra = f" · {where}" if len(config.cfg["SOURCES"]) > 1 else ""
-        lines.append(f"⏱ <b>Įkelta:</b> {d['age']}{html.escape(extra)}")
-    elif len(config.cfg["SOURCES"]) > 1:
-        lines.append(f"🛍 <b>Šaltinis:</b> {html.escape(where)}")
-    lines.append(f'🔗 <a href="{html.escape(d["url"])}">Atidaryti {html.escape(where)}</a>')
-    return "\n".join(lines)[:1024]
+    if "age" not in dropped:
+        if d.get("age"):
+            extra = f" · {where}" if len(config.cfg["SOURCES"]) > 1 else ""
+            lines.append(f"⏱ <b>Įkelta:</b> {d['age']}{html.escape(extra)}")
+        elif len(config.cfg["SOURCES"]) > 1:
+            lines.append(f"🛍 <b>Šaltinis:</b> {html.escape(where)}")
+    if "link" not in dropped:
+        lines.append(f'🔗 <a href="{html.escape(d["url"])}">Atidaryti {html.escape(where)}</a>')
+    return "\n".join(lines)
+
+
+def format_card(d, limit=CAPTION_LIMIT):
+    """Korteles tekstas (HTML), telpantis i `limit` simboliu.
+
+    Anksciau baigtas HTML buvo tiesiog nukerpamas ties 1024 simboliu – ilgoje kortelėje
+    pjuvis pakliudavo i <a href=...> vidury, Telegram atmesdavo ir nuotrauka, ir teksta,
+    o dealas dingdavo. Dabar trumpinama taip: aprasymas -> rizikos priezasciu sarasas ->
+    nebutinos eilutes (vieta, ikelimo laikas, pardavejas, nuoroda – ji yra ir mygtuke)."""
+    desc = re.sub(r"\s+", " ", d.get("description") or "").strip()
+    reasons = list(d.get("risk_reasons") or [])
+    dropped = set()
+
+    def build(desc_len, n_reasons):
+        return _card(d, _short(desc, desc_len), reasons[:n_reasons], len(reasons) - n_reasons, dropped)
+
+    card = build(160, len(reasons))
+    if len(card) <= limit:
+        return card
+    desc_len = min(160, limit - len(build(0, len(reasons))) - 6)
+    while desc_len >= 30:
+        card = build(desc_len, len(reasons))
+        if len(card) <= limit:
+            return card
+        desc_len -= 10
+    n = len(reasons)
+    while n > 1 and len(build(0, n)) > limit:
+        n -= 1
+    for key in ("place", "age", "seller", "rank", "suspicious", "defects", "link"):
+        card = build(0, n)
+        if len(card) <= limit:
+            return card
+        dropped.add(key)
+    card = build(0, n)
+    return card if len(card) <= limit else re.sub(r"<[^>]+>", "", card)[:limit]
 
 
 class Telegram:
-    def __init__(self, token=None, chat_id=None, http=None):
+    def __init__(self, token=None, chat_id=None, http=None, sleep=time.sleep, clock=time.monotonic):
         self.token = token if token is not None else config.BOT_TOKEN
         self.chat_id = str(chat_id if chat_id is not None else config.CHAT_ID)
         self.http = http or requests
+        self.sleep = sleep
+        self.clock = clock
+        self._last_sent = {}
+
+    def _throttle(self, chat_id):
+        """Grupeje – ne dazniau nei kas GROUP_MIN_INTERVAL s (Telegram riba: 20 per minute).
+        Grupiu ID neigiami; asmeniniams pokalbiams sios ribos nereikia."""
+        chat = str(chat_id)
+        if not chat.startswith("-"):
+            return
+        last = self._last_sent.get(chat)
+        if last is not None:
+            wait = GROUP_MIN_INTERVAL - (self.clock() - last)
+            if wait > 0:
+                self.sleep(wait)
+        self._last_sent[chat] = self.clock()
+
+    def _post(self, method, data, timeout):
+        """POST; jei Telegram sako 429 (per daug zinuciu) – palaukiam, kiek praso, ir kartojam."""
+        r = None
+        for _ in range(3):
+            r = self.http.post(self._url(method), data=data, timeout=timeout)
+            if getattr(r, "status_code", 200) != 429:
+                return r
+            wait = _retry_after(r)
+            print(f"  ! Telegram 429 (per daug zinuciu) – laukiu {wait:.0f}s")
+            self.sleep(wait)
+        return r
 
     def _url(self, method):
         return f"https://api.telegram.org/bot{self.token}/{method}"
@@ -99,10 +190,18 @@ class Telegram:
         if config.cfg["DRY_RUN"]:
             print("[DRY_RUN] Telegram:", text.replace("\n", " | ")[:200])
             return True
+        chat = chat_id or self.chat_id
         try:
-            r = self.http.post(self._url("sendMessage"), data={
-                "chat_id": chat_id or self.chat_id, "text": text, "parse_mode": "HTML",
-                "disable_web_page_preview": True, "disable_notification": silent}, timeout=15)
+            self._throttle(chat)
+            data = {"chat_id": chat, "text": text[:4096], "parse_mode": "HTML",
+                    "disable_web_page_preview": True, "disable_notification": silent}
+            r = self._post("sendMessage", data, 15)
+            if r.status_code == 400 and "parse" in (r.text or "").lower():
+                # Sugadintas HTML – siunciam paprastu tekstu, kad zinute nedingtu
+                print(f"  ! Telegram neperskaite HTML ({r.text[:100]}) – siunciu paprastu tekstu")
+                data = {k: v for k, v in data.items() if k != "parse_mode"}
+                data["text"] = plain_text(text)[:4096]
+                r = self._post("sendMessage", data, 15)
             if r.status_code != 200:
                 print(f"  ! Telegram klaida: {r.text[:150]}")
                 return False
@@ -128,10 +227,10 @@ class Telegram:
         keyboard = self.deal_keyboard(deal)
         if deal.get("photo"):
             try:
-                r = self.http.post(self._url("sendPhoto"), data={
+                self._throttle(chat_id or self.chat_id)
+                r = self._post("sendPhoto", {
                     "chat_id": chat_id or self.chat_id, "photo": deal["photo"], "caption": caption,
-                    "parse_mode": "HTML", "reply_markup": keyboard, "disable_notification": silent},
-                    timeout=20)
+                    "parse_mode": "HTML", "reply_markup": keyboard, "disable_notification": silent}, 20)
                 if r.status_code == 200:
                     return True
                 print(f"  ! Telegram nuotraukos klaida: {r.text[:150]} – siunciu be nuotraukos")

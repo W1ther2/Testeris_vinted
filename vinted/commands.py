@@ -18,6 +18,7 @@ HELP = """<b>Komandos</b>
 /garsas 30 – su garsu tik nuo 30% pigiau
 /rinka 50 – rinkos kaina = mediana (35 – pigesnis trečdalis, griežčiau)
 /pelnas ne – nerodyti galimo pelno kortelėje
+/minpelnas 15 – nesiųsti, jei galimas pelnas mažesnis (0 – nesvarbu)
 /tvarkingi taip|ne – tik tvarkingi telefonai
 /pauze – nesiųsti skelbimų, /testi – vėl siųsti
 /rezultatai – kiek pranešimų nupirkta ir per kiek laiko (/rezultatai 30 – per 30 d.)
@@ -64,6 +65,8 @@ TIPS = {
     "per brangu": "normalu – kaina ne žemiau rinkos. Daugiau skelbimų: /nuolaida 10",
     "ne pakankamai pigu": "pigiau už rinką, bet mažiau nei nuolaida. Daugiau: /nuolaida 10",
     "ne tarp pigiausių": "normalu – skelbimas ne tarp pigiausių dabar. Daugiau: /pigiausi 25",
+    "per mažas pelnas": "pigu, bet perpardavus mažai uždirbtum. Keisti: /minpelnas 10",
+    "įtartinai pigu": "gerokai pigiau už kitus – dažniausiai sugedęs ar užrakintas",
     "(retas modelis": "per mažai tokių skelbimų palyginti – vertinta pagal nuolaidą",
     "per mazai kainu duomenu": "modeliui dar trūksta kainų – kaupsis savaime arba /kaina 13 180",
     "ne telefonas / kitas modelis": "dėklai, stiklai, kiti modeliai – normalu",
@@ -82,7 +85,11 @@ def _stats_text(state):
     mins = int((_t.time() - r.get("time", 0)) // 60)
     totals = sorted((r.get("totals") or {}).items(), key=lambda kv: -kv[1])
     lines = [f"<b>Paskutinis paleidimas</b> (prieš {mins} min.)",
-             f"Gauta: {r.get('fetched', 0)}, naujų: {r.get('new', 0)}, išsiųsta: {r.get('sent', 0)}", ""]
+             f"Gauta: {r.get('fetched', 0)}, naujų: {r.get('new', 0)}, išsiųsta: {r.get('sent', 0)}"]
+    if r.get("sources"):
+        from .sources import label
+        lines.append("Pagal šaltinį: " + ", ".join(f"{label(k)} {v}" for k, v in sorted(r["sources"].items())))
+    lines.append("")
     for reason, n in totals[:10]:
         tip = next((v for k, v in TIPS.items() if reason.startswith(k)), "")
         lines.append(f"• {reason}: <b>{n}</b>" + (f"\n   <i>{tip}</i>" if tip else ""))
@@ -113,7 +120,7 @@ def _accuracy_text(state):
                      f"dar trūksta {truksta}.</i>")
     elif acc["target"]:
         lines.append(f"\n<i>Teisingas būtų pataisymas x{acc['target'] / c['ASKING_SALE_FACTOR']:.3f}; "
-                     f"prie jo einama po {c['CALIBRATION_MAX_STEP']:.0%} per paleidimą.</i>")
+                     f"prie jo einama po {c['CALIBRATION_MAX_STEP']:.0%} per dieną.</i>")
     return "\n".join(lines)
 
 
@@ -293,6 +300,14 @@ def handle(text, state):
                     f"<i>Nenurodyta baterija praleidžiama (kortelėje – „nenurodyta“), "
                     f"o mažesnė – tik jei bent {c['LOW_BATTERY_MIN_DISCOUNT']:.0%} pigiau.</i>")
 
+        if cmd in ("minpelnas", "min_pelnas"):
+            v = float(args.replace("€", "").replace(",", ".").strip())
+            if not 0 <= v <= 1000:
+                raise ValueError
+            _set(state, "MIN_PROFIT_EUR", v)
+            return (f"✅ Siųsiu tik su galimu pelnu nuo {v:.0f} €" if v
+                    else "✅ Pelnas nebetikrinamas – siųsiu ir be pelno")
+
         if cmd == "pelnas":
             v = args.lower() not in ("ne", "no", "0", "off", "isjungti", "nerodyti")
             _set(state, "SHOW_PROFIT", v)
@@ -327,6 +342,7 @@ def handle(text, state):
 
         if cmd == "nustatymai":
             manual = config.market_prices()
+            minp = f"{c['MIN_PROFIT_EUR']:.0f} €" if c.get("MIN_PROFIT_EUR") else "netikrinamas"
             rezimas = (f"tarp {c['RANK_TOP_PCT']:.0%} pigiausių dabar" if c.get("DEAL_MODE") == "rank"
                        else f"bent {c['MIN_DISCOUNT']:.0%} pigiau nei vertė")
             return ("<b>Nustatymai</b>\n"
@@ -340,6 +356,7 @@ def handle(text, state):
                     f"{' (auto)' if c.get('AUTO_CALIBRATE') else ' (rankinis)'}\n"
                     f"Tik tvarkingi: {'taip' if c.get('TIDY_ONLY') else 'ne'}\n"
                     f"Rodyti pelną: {'taip' if c.get('SHOW_PROFIT') else 'ne'}\n"
+                    f"Min. pelnas: {minp}\n"
                     f"Pauzė: {'taip' if c.get('PAUSED') else 'ne'}\n"
                     f"Rankinės kainos: {', '.join(f'{k} = {v:.0f} €' for k, v in manual.items()) or 'nėra'}")
     except (ValueError, IndexError):

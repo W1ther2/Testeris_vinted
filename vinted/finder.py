@@ -4,6 +4,7 @@
 import concurrent.futures
 import hashlib
 import html
+import os
 import threading
 import time
 import traceback
@@ -36,6 +37,8 @@ class Run:
         self.alerts = []
         self.last_error = ""
         self.deadline = None        # kada baigti si saltini (kad kitiems liktu laiko)
+        self.source_stats = {}      # {saltinis: {"fetched", "error", "crash"}} – siam paleidimui
+        self.step_errors = []       # papildomi darbai, kurie nuluzo (pranesama kas valanda)
         # Saltiniai gali suktis lygiagreciai, todel bendri duomenys (rinkos istorija,
         # matytu sarasas, Telegram) liecami tik su sia spyna.
         self.lock = threading.RLock()
@@ -52,6 +55,12 @@ class Run:
     @examples.setter
     def examples(self, value):
         self._local.examples = value
+
+    def reject_bad(self, uid, code, reason, example=None):
+        """Atmetam IR isimam is rinkos palyginimo: uzrakintas, sugedes, ne telefonas ar
+        uzsienio skelbimas neturi nei stumti tvarkingu telefonu vietos, nei keisti rinkos kainos."""
+        self.state.market.exclude(uid, code)
+        return self.reject(reason, example)
 
     def reject(self, reason, example=None):
         with self.lock:
@@ -104,6 +113,8 @@ class Run:
         if not drop_from:
             with self.lock:
                 self.new_count += 1
+        # Nuo sios kainos skaiciuosim kita atpigima (ir laipsniska: 300 -> 290 -> 280)
+        self.state.market.mark_evaluated(uid, price)
         cat_condition = listing.condition
         if c["TIDY_ONLY"] and not condition_ok(cat_condition, c["MIN_CONDITION"]):
             self.new_seen[uid] = time.time()
@@ -127,6 +138,14 @@ class Run:
                 return self.reject("ne tarp pigiausių",
                                    f"iPhone {model} {price:.0f}€ – {rank.place}-as iš {rank.n} "
                                    f"({rank.low:.0f}–{rank.high:.0f}€)")
+            # Gerokai pigesnis uz kita pigiausia tokį pat telefona – beveik visada kazkas
+            # negerai (pvz. „iPhone 14 uzbluokuotas be akumo“ uz 130 €, kai kiti nuo 200 €).
+            ratio = self.suspicious_ratio(rank, price)
+            if ratio is not None and ratio < c["SUSPICIOUS_REJECT_RATIO"]:
+                self.new_seen[uid] = time.time()
+                return self.reject_bad(uid, "itartinai", "įtartinai pigu",
+                                   f"iPhone {model} {price:.0f}€ – kitas pigiausias {rank.peer_low:.0f}€ "
+                                   f"({1 - ratio:.0%} pigiau)")
         else:
             best_case = quote.price * CONDITION_FACTOR.get(cat_condition, 1.08) * 1.03
             if price > best_case * (1 - c["MIN_DISCOUNT"]):
@@ -145,26 +164,34 @@ class Run:
         detail = source.detail(listing)
         if getattr(source, "detail_needs_request", True):
             self.sleep(c["DETAIL_SLEEP_SECONDS"])
+        if detail.status == "unknown":
+            # Puslapio gauti nepavyko (403, laiko limitas, iššūkio puslapis). Be aprašymo nežinom,
+            # ar telefonas neužrakintas ir veikia, todėl nesiunčiam – bandysim kitame paleidime.
+            return self.detail_failed(uid, title)
+        with self.lock:
+            self.state.forget_detail_failure(uid)
         if detail.status in ("sold", "gone"):
             self.state.market.set_status(uid, detail.status)
             return self.reject("jau parduotas" if detail.status == "sold" else "skelbimo nebėra")
         description = detail.description or ""
         if description_not_phone(description) or detect_model(detail.title or title) is None:
-            return self.reject("ne telefonas (pagal aprašymą)", f"{title[:40]} | {description[:60]}")
+            return self.reject_bad(uid, "ne_telefonas", "ne telefonas (pagal aprašymą)",
+                                   f"{title[:40]} | {description[:60]}")
 
         if c["ONLY_LITHUANIAN_TEXT"]:
             lang = detect_foreign_language(detail.title or title, description)
             if lang and lang not in config.allowed_languages():
-                return self.reject("kalba", f"{lang}: {title[:40]} | {description[:50]}")
+                return self.reject_bad(uid, "kalba", "kalba", f"{lang}: {title[:40]} | {description[:50]}")
 
         defects = find_defects(title, description)
         if any(f == 0 for _, f in defects):
-            return self.reject("neveikiantis / užrakintas / netestuotas", f"{title[:40]} {[d for d, _ in defects]}")
+            return self.reject_bad(uid, "neveikia", "neveikiantis / užrakintas / netestuotas",
+                                   f"{title[:40]} {[d for d, _ in defects]}")
         if c["TIDY_ONLY"]:
             allowed = set(c["ALLOWED_DEFECTS"])
             bad = [d for d, _ in defects if d not in allowed]
             if bad:
-                return self.reject("defektai", f"{title[:40]} {bad}")
+                return self.reject_bad(uid, "defektai", "defektai", f"{title[:40]} {bad}")
         condition = detail.condition or cat_condition
         if c["TIDY_ONLY"] and not condition_ok(condition, c["MIN_CONDITION"]):
             return self.reject(f"būklė {condition}")
@@ -200,7 +227,7 @@ class Run:
             isskirtine = (rank.place == 1) if rank is not None \
                 else discount >= c["LOW_BATTERY_MIN_DISCOUNT"]
             if not isskirtine:
-                return self.reject("baterija", f"{title[:40]} {battery}%")
+                return self.reject_bad(uid, "baterija", "baterija", f"{title[:40]} {battery}%")
             battery_low = True
 
         # 3) Pardavejas
@@ -209,7 +236,7 @@ class Run:
         if c["FILTER_BY_COUNTRY"]:
             ok = (country in c["ALLOWED_COUNTRY_CODES"]) if country else (not c["REQUIRE_KNOWN_COUNTRY"])
             if not ok:
-                return self.reject("salis", f"{country}: {title[:40]}")
+                return self.reject_bad(uid, "salis", "salis", f"{country}: {title[:40]}")
         rating, reviews = seller.get("rating"), seller.get("reviews")
         if rating is not None and reviews is not None and (
                 rating < c["MIN_SELLER_RATING"] or reviews < c["MIN_SELLER_REVIEWS"]):
@@ -241,10 +268,33 @@ class Run:
             "drop_from": drop_from, "created_at": listing.created_at, "rank": rank,
             "age": human_age(listing.created_at),
         }
+        if c["MIN_PROFIT_EUR"] and profit is not None and profit < c["MIN_PROFIT_EUR"]:
+            return self.reject("per mažas pelnas",
+                               f"iPhone {model} {price:.0f}€ – pelnas ~{profit:.0f}€ "
+                               f"(riba {c['MIN_PROFIT_EUR']:.0f}€)")
+        ratio = self.suspicious_ratio(rank, price)
+        if ratio is not None and ratio < c["SUSPICIOUS_WARN_RATIO"]:
+            deal["suspicious"] = {"ratio": ratio, "peer_low": rank.peer_low}
         if c["PAUSED"]:
             return self.reject("pauzė (/testi – įjungti)")
         self.new_seen[fp] = time.time()
         return deal
+
+    def detail_failed(self, uid, title):
+        """Skelbimo puslapis neatsidare. Iki DETAIL_RETRIES kartu – bandom kitame paleidime."""
+        with self.lock:
+            n = self.state.note_detail_failure(uid)
+        if n < max(1, int(config.cfg["DETAIL_RETRIES"])):
+            self.new_seen.pop(uid, None)          # nepazymim matytu – kitas paleidimas bandys dar karta
+            return self.reject("skelbimo atidaryti nepavyko – bandysiu vėliau", title[:45])
+        return self.reject("skelbimo atidaryti nepavyko", title[:45])
+
+    @staticmethod
+    def suspicious_ratio(rank, price):
+        """Kiek sis skelbimas kainuoja, palyginus su kitu pigiausiu (1.0 = tiek pat)."""
+        if rank is None or not rank.peer_low or price is None:
+            return None
+        return price / rank.peer_low
 
     # --- visas paleidimas --------------------------------------------------------
     def out_of_time(self):
@@ -437,7 +487,26 @@ class Run:
                 listing.skip_reason = f"kalba ({lang}, pagal pavadinimą)"
 
     def scan(self, source, seen, pages):
-        """Viena saltinio perziura. Grazina, kiek skelbimu gauta."""
+        """Viena saltinio perziura. Grazina, kiek skelbimu gauta.
+
+        Saltinio klaida nenutraukia nei kitu saltiniu, nei viso paleidimo (anksciau tai
+        galiojo tik lygiagreciam rezimui). Rezultatas irasomas i source_stats – pagal ji
+        pranesama, kai saltinis neveikia."""
+        fetched, crash = 0, ""
+        try:
+            fetched = self._scan(source, seen, pages)
+        except Exception as e:
+            crash = f"klaida kode: {type(e).__name__}: {e}"
+            self.last_error = f"{source.label}: {crash}"
+            print(f"! {source.label} nutruko: {crash}")
+            print(traceback.format_exc())
+        with self.lock:
+            self.source_stats[source.name] = {
+                "fetched": fetched, "crash": crash,
+                "error": crash or source.unavailable or getattr(source, "last_error", "") or ""}
+        return fetched
+
+    def _scan(self, source, seen, pages):
         c = config.cfg
         fetched = 0
         source.start()
@@ -519,14 +588,7 @@ class Run:
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
                 futures = {pool.submit(self.scan, s, seen, pages): s for s in sources}
                 for future in concurrent.futures.as_completed(futures):
-                    source = futures[future]
-                    try:
-                        fetched += future.result()
-                    except Exception as e:
-                        # Vieno saltinio gedimas neturi nutraukti kito
-                        self.last_error = f"{source.label}: {e}"
-                        print(f"! {source.label} nutruko: {e}")
-                        print(traceback.format_exc())
+                    fetched += future.result()          # scan() pats sugauna klaidas
             return fetched
 
         # Paeiliui: saltiniai dalijasi laiku po lygiai, o ju eiliskumas kas paleidima
@@ -551,59 +613,77 @@ class Run:
         seen = load_seen()
         self.state = State.load(seen=seen)
         config.apply_overrides(self.state.overrides)
-        self.report_config_error()
-        self.process_commands()
 
         self.new_seen = dict(seen)
         self.new_seen.pop("__heartbeat__", None)
         self.new_count = 0
-
-        pages = c["PAGES"] if seen else max(c["PAGES"], c["FULL_SCAN_PAGES"])
-        if not seen:
-            print(f"seen.json tuscias – pilnas perziurejimas ({pages} psl. kiekvienai paieskai)")
-
-        fetched = self.scan_all(seen, pages)
-
-        queries = config.cfg["SEARCH_QUERIES"]
-        if c["ROTATE_QUERIES"] and queries:
-            start = self.state.query_offset % len(queries)
-            self.state.query_offset = (start + max(1, len(queries) // 3)) % len(queries)
-
+        fetched = 0
         try:
-            self.track_results()
-            self.send_report()
-        except Exception as e:                       # statistika neturi sustabdyti boto
-            print(f"! Rezultatu sekimas nepavyko: {e}")
-            print(traceback.format_exc())
+            self.report_config_error()
+            self.step("Telegram komandos", self.process_commands)
 
-        if c["USE_SOLD_PRICES"]:
-            self.check_sold()
+            pages = c["PAGES"] if seen else max(c["PAGES"], c["FULL_SCAN_PAGES"])
+            if not seen:
+                print(f"seen.json tuscias – pilnas perziurejimas ({pages} psl. kiekvienai paieskai)")
 
-        self.report_blocked_sources()
-        self.calibrate()
-        self.print_market()
-        summary = ", ".join(f"{k}: {n}" for k, n in sorted(self.totals.items(), key=lambda kv: -kv[1]))
-        print(f"IS VISO: gauta {fetched}, tinkama {len(self.alerts)}. Atmesta – {summary}")
-        self.heartbeat(fetched, summary)
-        self.state.last_run = {"time": int(time.time()), "fetched": fetched, "new": self.new_count,
-                               "sent": len(self.alerts), "totals": self.totals}
-        if fetched == 0:
-            self.state.fail_streak += 1
-            print(f"! Negauta skelbimu ({self.state.fail_streak} paleidimas is eiles): {self.last_error}")
-            # Vienkartinis 403 = laikinas blokas serverio IP; pranesam tik jei kartojasi
-            if self.state.fail_streak >= c["FAIL_ALERT_RUNS"]:
-                self.tg.send_message(
-                    f"<b>ISPEJIMAS</b>: {self.state.fail_streak} paleidimus is eiles negauta nei vieno "
-                    "skelbimo.\nGalimai pasikeite API arba saltinis blokuoja – patikrink logus.\n"
-                    f"Priezastis: <code>{html.escape(self.last_error or 'nezinoma')}</code>")
+            fetched = self.scan_all(seen, pages)
+
+            queries = config.cfg["SEARCH_QUERIES"]
+            if c["ROTATE_QUERIES"] and queries:
+                start = self.state.query_offset % len(queries)
+                self.state.query_offset = (start + max(1, len(queries) // 3)) % len(queries)
+
+            # Papildomi darbai: vieno klaida neturi sustabdyti kitu nei issaugojimo
+            self.step("Pranesimu rezultatai", self.track_results)
+            self.step("Ataskaita", self.send_report)
+            if c["USE_SOLD_PRICES"]:
+                self.step("Pardavimu patikra", self.check_sold)
+            self.step("Saltiniu busena", self.update_source_health)
+            self.step("Kalibravimas", self.calibrate)
+            self.step("Rankines kainos", self.check_manual_prices)
+            self.step("Rinkos kainos", self.print_market)
+            summary = ", ".join(f"{k}: {n}" for k, n in sorted(self.totals.items(), key=lambda kv: -kv[1]))
+            print(f"IS VISO: gauta {fetched}, tinkama {len(self.alerts)}. Atmesta – {summary}")
+            self.step("Heartbeat", lambda: self.heartbeat(fetched, summary))
+            self.state.last_run = {"time": int(time.time()), "fetched": fetched, "new": self.new_count,
+                                   "sent": len(self.alerts), "totals": self.totals,
+                                   "sources": {k: v["fetched"] for k, v in self.source_stats.items()}}
+            if fetched == 0:
+                # Ispejimai siunciami kiekvienam saltiniui atskirai (update_source_health)
+                self.state.fail_streak += 1
+                print(f"! Negauta skelbimu ({self.state.fail_streak} paleidimas is eiles): {self.last_error}")
+            else:
                 self.state.fail_streak = 0
-        else:
-            self.state.fail_streak = 0
-
-        self.state.save()
-        save_seen(self.new_seen)
+            self.step("Klaidu pranesimas", self.report_step_errors)
+        finally:
+            # Busena issaugoma VISADA – net jei kazkas nuluzo. Kitaip kitas paleidimas
+            # is naujo atidarinetu tuos pacius skelbimus.
+            self.state.save()
+            save_seen(self.new_seen)
 
         print(f"Issiusta {len(self.alerts)} alert'u." if self.alerts else "Nauju deal'u nera.")
+
+    def step(self, name, fn):
+        """Vykdo papildoma darba; klaida uzrasoma, bet paleidimas tesiamas."""
+        try:
+            return fn()
+        except Exception as e:
+            self.step_errors.append(f"{name}: {type(e).__name__}: {e}")
+            print(f"! {name} nepavyko: {e}")
+            print(traceback.format_exc())
+            return None
+
+    def report_step_errors(self):
+        """Nuluzusios papildomos dalys – pranesam, bet ne dazniau nei kas valanda."""
+        if not self.step_errors:
+            return
+        now = time.time()
+        if now - float(self.state.source_alerts.get("__steps__") or 0) < 3600:
+            return
+        self.state.source_alerts["__steps__"] = now
+        text = "\n".join(html.escape(e[:200]) for e in self.step_errors[:5])
+        self.tg.send_message(f"⚠️ <b>Dalis darbų nepavyko</b> (skelbimai tikrinami toliau)\n<code>{text}</code>",
+                             silent=True)
 
     def report_config_error(self):
         """Sugadintas config.json (pvz. dingo kablelis redaguojant GitHub'e) – botas veikia
@@ -620,27 +700,84 @@ class Run:
             "<i>Dažniausiai trūksta kablelio eilutės gale arba kabutės. "
             "Eilutės numeris nurodytas klaidoje (line …).</i>")
 
-    def report_blocked_sources(self):
-        """Kai vienas saltinis blokuojamas, o kitas veikia, bendras skaicius atrodo
-        normaliai ir problema lieka nepastebeta. Todel pranesam atskirai – bet ne
-        kas paleidima, kitaip Telegram uzsikimstu."""
-        blocked = [s for s in self.sources if s.unavailable]
-        if not blocked:
-            return
-        print("! Nepasiekiami saltiniai: "
-              + ", ".join(f"{s.label} ({s.unavailable})" for s in blocked))
-        hours = config.cfg["SOURCE_ALERT_HOURS"]
+    def update_source_health(self):
+        """Kiekvieno saltinio busena: pranesam, kai neveikia, ir kai vel atsigauna.
+
+        Anksciau Vinted blokavimas likdavo nepastebetas, kol Pirkpard grazindavo bent kelis
+        skelbimus, o kai neveikdavo viskas, ispejimas kartodavosi kas 3 paleidimus (~48 per
+        para). Dabar: aiskus blokas (Cloudflare, klaida kode) – pranesam is karto;
+        0 skelbimu – po FAIL_ALERT_RUNS paleidimu is eiles; kartojam ne dazniau nei kas
+        SOURCE_ALERT_HOURS; atsigavus – trumpa zinute."""
+        c = config.cfg
         now = time.time()
-        for source in blocked:
-            last = float(self.state.source_alerts.get(source.name) or 0)
+        hours = c["SOURCE_ALERT_HOURS"]
+        blocked = [s for s in self.sources if s.unavailable]
+        if blocked:
+            print("! Nepasiekiami saltiniai: "
+                  + ", ".join(f"{s.label} ({s.unavailable})" for s in blocked))
+        for source in self.sources:
+            st = self.source_stats.get(source.name)
+            if st is None:
+                continue                     # siame paleidime netikrintas (pvz. baigesi laikas)
+            name = source.name
+            if st["fetched"] > 0:
+                self.state.source_zero.pop(name, None)
+                since = self.state.source_down.pop(name, None)
+                if since:
+                    self.state.source_alerts.pop(name, None)
+                    down_h = max(1, round((now - float(since)) / 3600))
+                    self.tg.send_message(f"✅ <b>{html.escape(source.label)} vėl veikia</b> "
+                                         f"(neveikė ~{down_h} val.)", silent=True)
+                continue
+            streak = int(self.state.source_zero.get(name) or 0) + 1
+            self.state.source_zero[name] = streak
+            reason = source.unavailable or st.get("crash") or ""
+            if not reason and streak < c["FAIL_ALERT_RUNS"]:
+                continue                     # vienkartinis 403 – laikinas; pranesam, jei kartojasi
+            self.state.source_down.setdefault(name, now)
+            last = float(self.state.source_alerts.get(name) or 0)
             if hours > 0 and now - last < hours * 3600:
                 continue
-            self.state.source_alerts[source.name] = now
+            self.state.source_alerts[name] = now
+            if reason:
+                self.tg.send_message(
+                    f"⚠️ <b>{html.escape(source.label)} nepasiekiamas</b>\n"
+                    f"Priežastis: {html.escape(reason[:300])}\n"
+                    f"Kiti šaltiniai veikia toliau. Jei kartojasi – gali reikėti paleisti "
+                    f"iš kito IP (ne GitHub serverio).", silent=True)
+            else:
+                self.tg.send_message(
+                    f"⚠️ <b>ISPEJIMAS</b>: {html.escape(source.label)} – {streak} paleidimus iš eilės "
+                    "negauta nė vieno skelbimo.\nGalimai pasikeitė API arba šaltinis blokuoja – "
+                    f"patikrink logus.\nPriežastis: <code>{html.escape((st.get('error') or 'nežinoma')[:300])}</code>")
+
+    def check_manual_prices(self, now=None):
+        """Rankine kaina, smarkiai nesutampanti su rinka, tyliai isjungia dealus: pvz. 180 €
+        visiems iPhone 13 reiske, kad per pelno filtra praeidavo tik pigesni nei ~150 €.
+        Pranesam ne dazniau nei karta per para kiekvienai kainai."""
+        manual = config.market_prices()
+        now = now if now is not None else time.time()
+        for key, price in manual.items():
+            model, _, storage = key.partition("|")
+            data = self.state.market.quote(model, storage or None, manual=False)
+            if data is None or data.source not in ("parduoti", "skelbimai"):
+                continue                       # duomenu per mazai – palyginti nera su kuo
+            if abs(price / data.price - 1) < 0.25:
+                continue
+            print(f"! Rankinė kaina iPhone {key}: {price:.0f} € – rinka rodo ~{data.price:.0f} € "
+                  f"({data.source}, {data.samples})")
+            alert_key = f"__manual__{key}"
+            if now - float(self.state.source_alerts.get(alert_key) or 0) < 86400:
+                continue
+            self.state.source_alerts[alert_key] = now
+            name = f"iPhone {model}" + (f" {storage}" if storage else " (visos talpos)")
+            cmd = f"/kaina {model}" + (f" {storage.replace(' GB', '').replace(' ', '')}" if storage else "")
+            kiek = f"{data.samples} {'parduotų' if data.source == 'parduoti' else 'skelb.'}"
             self.tg.send_message(
-                f"⚠️ <b>{html.escape(source.label)} nepasiekiamas</b>\n"
-                f"Priežastis: {html.escape(source.unavailable)}\n"
-                f"Kiti šaltiniai veikia toliau. Jei kartojasi – gali reikėti paleisti "
-                f"iš kito IP (ne GitHub serverio).", silent=True)
+                f"⚠️ <b>Rankinė kaina gal pasenusi</b>: {html.escape(name)} = {price:.0f} €, "
+                f"o rinka rodo ~{data.price:.0f} € ({kiek}).\n"
+                f"Kol taip, pelno filtras gali atmesti visus šio modelio pasiūlymus.\n"
+                f"Grąžinti automatinę kainą: <code>{html.escape(cmd)} trinti</code>", silent=True)
 
     def calibrate(self):
         """Palygina, kiek spejom, su tuo, kiek realiai gauta uz parduotus telefonus."""
@@ -685,7 +822,8 @@ class Run:
         hours = config.cfg["HEARTBEAT_HOURS"]
         if hours <= 0 or time.time() - self.state.heartbeat < hours * 3600:
             return
-        sources = ", ".join(s.label for s in self.sources)
+        sources = ", ".join(f"{s.label} {self.source_stats.get(s.name, {}).get('fetched', 0)}"
+                            for s in self.sources)
         self.tg.send_message("✅ <b>Skriptas veikia</b>\n"
                              f"Šaltiniai: {html.escape(sources)}\n"
                              f"Šis paleidimas: gauta {fetched} skelb., naujų {self.new_count}, "
@@ -695,13 +833,40 @@ class Run:
 
 
 def main():
+    """Grazina proceso isejimo koda: 0 – gerai, 1 – nuluzo, 2 – nenurodyti BOT_TOKEN / CHAT_ID.
+    Ne nulis GitHub'e rodomas raudonai, ir GitHub pats atsiuncia laiska apie klaida."""
     config.load()
     if not config.BOT_TOKEN or not config.CHAT_ID:
         print("Nenurodyti BOT_TOKEN / CHAT_ID (GitHub Secrets)!")
-        return
+        return 2
     tg = Telegram()
+    run = None
     try:
-        Run(build_sources(), tg).run()
+        run = Run(build_sources(), tg)
+        run.run()
+        return 0
     except Exception as e:
         print(traceback.format_exc())
-        tg.send_message("<b>SKRIPTAS UZLUZO</b>\n" + html.escape(str(e)[:400]))
+        notify_crash(tg, run, e)
+        return 1
+
+
+def notify_crash(tg, run, error, now=None):
+    """Pranesimas apie luzima – ne dazniau nei kas valanda (kitaip kas 10 min.)."""
+    now = now if now is not None else time.time()
+    state = getattr(run, "state", None)
+    if state is not None:
+        last = float(state.source_alerts.get("__crash__") or 0)
+        if now - last < 3600:
+            print(f"(apie klaida jau pranesta pries {int((now - last) // 60)} min.)")
+            return
+        state.source_alerts["__crash__"] = now
+        try:
+            state.save()
+        except Exception as e:                       # pragma: no cover
+            print(f"! Nepavyko issaugoti busenos: {e}")
+    frames = traceback.extract_tb(error.__traceback__)
+    where = f"{os.path.basename(frames[-1].filename)}:{frames[-1].lineno}" if frames else "?"
+    tg.send_message("<b>SKRIPTAS UZLUZO</b>\n"
+                    f"<code>{html.escape(type(error).__name__)}: {html.escape(str(error)[:300])}</code>\n"
+                    f"Vieta: {html.escape(where)}\n<i>Kitas pranešimas apie klaidą – ne anksčiau nei po valandos.</i>")

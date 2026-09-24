@@ -12,7 +12,6 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "config.json")
 SEEN_FILE = os.environ.get("SEEN_FILE", "seen.json")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
-OLD_PRICES_FILE = "prices.json"    # senas formatas – automatiskai perkeliamas i state.json
 
 BASE = "https://www.vinted.lt"
 API_BASE = "https://api.vinted.lt"
@@ -70,6 +69,11 @@ DEFAULTS = {
     # jau parduoti – su jais lyginti butu tas pats, kas lyginti su nebeegzistuojanciais.
     "RANK_RECENT_DAYS": 2,
     "MIN_DISCOUNT": 0.10,            # bent 10% pigiau nei telefono verte
+    # „Per pigu“ – keturios ribos, kiekviena savo vietoje:
+    #   HARD_MIN_PRICE_RATIO    – x rinkos kainos: ATMETAMA pries atidarant skelbima (dalys, dezute)
+    #   SUSPICIOUS_REJECT_RATIO – x KITO pigiausio tokio pat skelbimo: ATMETAMA („rank“ rezime)
+    #   SUSPICIOUS_WARN_RATIO   – x kito pigiausio: siunciama su ⚠️ „Įtartinai pigu“
+    #   SUSPICIOUS_PRICE_RATIO  – x rinkos kainos: siunciama, bet rizikos eiluteje prirasoma priezastis
     "HARD_MIN_PRICE_RATIO": 0.40,    # pigiau nei 40% rinkos – beveik visada sugedes/dalims/ne telefonas, atmetama
     "SUSPICIOUS_PRICE_RATIO": 0.55,  # pigiau nei 55% rinkos – siunciama, bet pazymima rizika
     # Baterija: nurodyta ir per maza -> atmetama; nenurodyta -> praleidziama su zyma kortelėje.
@@ -99,7 +103,7 @@ DEFAULTS = {
     # palygina su realia kaina. Sistemine paklaida automatiskai istaisoma.
     "AUTO_CALIBRATE": True,
     "MIN_CALIBRATION_SAMPLES": 20,   # kiek parduotu reikia, kad pataisymas butu daromas
-    "CALIBRATION_MAX_STEP": 0.05,    # daugiausiai 5% pokytis per paleidima (be soliu)
+    "CALIBRATION_MAX_STEP": 0.05,    # daugiausiai 5% pokytis per diena (be soliu)
     "CALIBRATION_MIN": 0.70,         # ribos, kad klaidingi duomenys nenuvestu i absurda
     "CALIBRATION_MAX": 1.15,
 
@@ -114,6 +118,11 @@ DEFAULTS = {
 
     # --- Pelnas perpardavus ---
     "SHOW_PROFIT": True,
+    "MIN_PROFIT_EUR": 15,            # nesiusti, jei galimas pelnas mazesnis (0 = nesvarbu)
+    # Kai skelbimas gerokai pigesnis uz KITA pigiausia – beveik visada kazkas negerai
+    # (uzrakintas, be dalies, apgavyste). Santykis su kitu pigiausiu tokiu pat telefonu:
+    "SUSPICIOUS_REJECT_RATIO": 0.60, # pigiau nei 60% kito pigiausio – atmesti
+    "SUSPICIOUS_WARN_RATIO": 0.75,   # pigiau nei 75% – siusti, bet pazymeti ⚠️
     "SHOW_RANK": False,              # rodyti kortelej „12-as pigiausias iš 64 ...“ (atrankai naudojama visada)
 
     # --- Rezultatu sekimas: ar praneseti skelbimai buvo nupirkti ir per kiek laiko ---
@@ -169,6 +178,9 @@ DEFAULTS = {
     "BLOCK_BACKOFF_SECONDS": [30, 60, 120],   # pauzes, kai Vinted blokuoja (403)
     "STOP_AFTER_BLOCKED_QUERIES": 3,          # po tiek is eiles blokuotu paiesku – baigti paleidima
     "DETAIL_SLEEP_SECONDS": 1.0,
+    # Kai skelbimo puslapio atidaryti nepavyksta (403, laiko limitas), skelbimas nesiunciamas
+    # „aklai“ – bandoma dar kituose paleidimuose, bet ne daugiau nei tiek kartu.
+    "DETAIL_RETRIES": 3,
     "DRY_RUN": False,
     "PAUSED": False,                 # True = skelbimai nesiunciami (Telegram /pauze)
     "DEBUG": False,
@@ -211,7 +223,7 @@ def load(path=CONFIG_FILE):
 
 
 # Raktai, kuriuos galima keisti Telegram komandomis
-OVERRIDABLE = {"MIN_DISCOUNT", "MIN_BATTERY", "LOUD_DISCOUNT", "MARKET_PRICES", "PAUSED", "TIDY_ONLY",
+OVERRIDABLE = {"MIN_PROFIT_EUR", "MIN_DISCOUNT", "MIN_BATTERY", "LOUD_DISCOUNT", "MARKET_PRICES", "PAUSED", "TIDY_ONLY",
                "MARKET_PERCENTILE", "SHOW_PROFIT", "AUTO_CALIBRATE", "DEAL_MODE", "RANK_TOP_PCT"}
 
 

@@ -2,11 +2,10 @@
 """Busena tarp paleidimu: seen.json (matyti skelbimai) ir state.json (visa kita)."""
 
 import json
-import os
 import time
 
 from . import config
-from .market import Market, migrate_old_prices
+from .market import Market
 from .tracker import Tracker
 
 
@@ -78,27 +77,35 @@ class State:
         self.users = data.get("users") or {}
         # {saltinio vardas: kada paskutini karta pranesta apie blokavima}
         self.source_alerts = data.get("source_alerts") or {}
+        # {saltinio vardas: kiek paleidimu is eiles negauta nei vieno skelbimo}
+        self.source_zero = data.get("source_zero") or {}
+        # {saltinio vardas: nuo kada neveikia} – kad atsigavus galetume pranesti
+        self.source_down = data.get("source_down") or {}
         # Pranesimu rezultatai (ar nupirkta ir per kiek) – zr. tracker.py
         self.tracker = Tracker(data.get("tracked"))
         self.last_report = float(data.get("last_report") or 0)
+        # {uid: {"n": kiek kartu nepavyko atidaryti skelbimo, "t": kada paskutini karta}}
+        self.detail_failures = data.get("detail_failures") or {}
+
+    def note_detail_failure(self, uid, now=None):
+        """Dar vienas nepavykes skelbimo atidarymas. Grazina, kiek kartu is viso."""
+        e = self.detail_failures.get(uid) or {}
+        e = {"n": int(e.get("n") or 0) + 1, "t": int(now if now is not None else time.time())}
+        self.detail_failures[uid] = e
+        return e["n"]
+
+    def forget_detail_failure(self, uid):
+        self.detail_failures.pop(uid, None)
 
     @classmethod
-    def load(cls, path=None, old_prices_path=None, seen=None):
+    def load(cls, path=None, seen=None):
         path = path or config.STATE_FILE
-        old_prices_path = old_prices_path or config.OLD_PRICES_FILE
         state = None
         try:
             with open(path, "r", encoding="utf-8") as f:
                 state = cls(json.load(f))
         except FileNotFoundError:
             state = cls()
-            if False and os.path.exists(old_prices_path):   # sena istorija uztersta sugedusiais – nenaudojam
-                try:
-                    with open(old_prices_path, "r", encoding="utf-8") as f:
-                        state.market = migrate_old_prices(json.load(f))
-                    print(f"Perkelta kainu istorija is {old_prices_path} ({len(state.market.items)} skelb.)")
-                except Exception as e:
-                    print(f"! Nepavyko perkelti {old_prices_path}: {e}")
         except Exception as e:
             print(f"! {path} sugadintas ({e}) – pradedama nuo tuscio.")
             state = cls()
@@ -123,11 +130,16 @@ class State:
 
     def _save(self, path):
         self.market.prune()
+        week_ago = time.time() - 7 * 86400
+        self.detail_failures = {k: v for k, v in dict(self.detail_failures).items()
+                                if isinstance(v, dict) and v.get("t", 0) >= week_ago}
         data = {"market_version": self.MARKET_VERSION, "market": self.market.to_dict(),
                 "telegram_offset": self.telegram_offset,
                 "overrides": self.overrides, "heartbeat": self.heartbeat, "last_run": self.last_run,
                 "fail_streak": self.fail_streak, "query_offset": self.query_offset,
                 "users": self.users, "source_alerts": self.source_alerts,
-                "tracked": self.tracker.to_dict(), "last_report": self.last_report}
+                "source_zero": self.source_zero, "source_down": self.source_down,
+                "tracked": self.tracker.to_dict(), "last_report": self.last_report,
+                "detail_failures": self.detail_failures}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
