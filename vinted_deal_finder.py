@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-iPhone deal finder v35.
+iPhone deal finder v37.
 
 Iesko iPhone 8 … 17 Pro Max, kurie pigesni uz rinkos kaina (ivertinus bukle,
 baterija ir defektus), ir siuncia juos i Telegram.
@@ -9,10 +9,10 @@ Saltiniai ijungiami config.json rakte "SOURCES" (dabar: vinted, pirkpard; skelbi
 vienas failas vinted/sources/, zr. README.
 
 Paleidimas:   python vinted_deal_finder.py
-Reikia:       pip install requests curl_cffi
+Reikia:       pip install -r requirements.txt
 Aplinka:      BOT_TOKEN, CHAT_ID (GitHub Secrets)
 Failai:       config.json (nustatymai), seen.json ir state.json (issaugomi tarp paleidimu)
-Testai:       python -m unittest discover tests
+Testai:       python -m unittest discover -s tests -t .
 """
 
 import sys
@@ -29,4 +29,5 @@ except Exception as e:      # dazniausiai – ikeltas ne visas atnaujinimas arba
     raise
 
 if __name__ == "__main__":
+    # 0 – gerai, 1 – nuluzo, 2 – nenurodyti BOT_TOKEN / CHAT_ID (GitHub parodo raudonai)
     sys.exit(main())
