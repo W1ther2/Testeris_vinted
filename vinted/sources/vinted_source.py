@@ -99,6 +99,10 @@ class VintedSource(Source):
         if status in ("sold", "gone"):
             return Detail(status=status)
         og = parse_og_tags(page)
+        if status == "active" and not og:
+            # 200, bet ne skelbimo puslapis (pvz. botu patikros ar klaidos puslapis):
+            # aprasymo nera, tad nieko patikrinti negalim
+            return Detail(status="unknown")
         return Detail(
             status=status, title=og.get("title") or listing.title,
             description=og.get("description") or "", photo=og.get("image"),
