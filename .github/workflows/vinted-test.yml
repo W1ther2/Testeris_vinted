@@ -26,15 +26,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
+      # Testai cia nebeleidziami (kas 10 min. – tuscias laiko svaistymas): jie paleidziami
+      # atskirai, kai ikeli nauja koda (.github/workflows/tests.yml).
       - name: Idiegti bibliotekas
-        run: pip install requests curl_cffi
-
-      # Testai – mano (kodo autoriaus) patikra. Jei jie nepraeina (pvz. ikeltas ne visas
-      # atnaujinimas), botas vis tiek paleidziamas – geriau veikiantis botas nei jokio.
-      - name: Testai
-        continue-on-error: true
-        run: python -m unittest discover -s tests -t .
+        run: pip install -r requirements.txt
 
       - name: Paleisti (testinis botas)
         env:
