@@ -34,6 +34,21 @@ jobs:
       - name: Idiegti bibliotekas
         run: pip install -r requirements.txt
 
+      # Kaip ir pagrindiniame workflow: testine busena gyvena atskiroje sakoje,
+      # kad neterstu kodo istorijos (zr. .github/workflows/vinted.yml).
+      - name: Atsiusti testine busena
+        env:
+          STATE_BRANCH: busena-testas
+        run: |
+          if git fetch --depth=1 origin "$STATE_BRANCH" 2>/dev/null; then
+            for f in seen.test.json state.test.json; do
+              if git show "FETCH_HEAD:$f" > "$f.gauta" 2>/dev/null; then mv "$f.gauta" "$f"; else rm -f "$f.gauta"; fi
+            done
+            echo "Testine busena paimta is sakos '$STATE_BRANCH'"
+          else
+            echo "Sakos '$STATE_BRANCH' dar nera – naudoju tai, kas repozitorijoje"
+          fi
+
       - name: Paleisti (testinis botas)
         env:
           BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
@@ -46,21 +61,18 @@ jobs:
       - name: Issaugoti testine busena
         if: always()
         env:
-          BRANCH: ${{ github.ref_name }}
+          STATE_BRANCH: busena-testas
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Paleidimai vyksta po viena, tad sio paleidimo seen.test.json / state.test.json – naujausi.
-          # Imam naujausia saka (su tavo pakeitimais, pvz. config.json) ir uzdedam savo busena.
-          # Anksciau „git pull --rebase“ konfliktas tyliai numesdavo visa busena.
+          if [ ! -f seen.test.json ] && [ ! -f state.test.json ]; then echo "Nera ko saugoti"; exit 0; fi
+          work=$(mktemp -d)
+          for f in seen.test.json state.test.json; do [ -f "$f" ] && cp "$f" "$work/$f"; done
+          cd "$work"
+          git init -q -b "$STATE_BRANCH"
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          mkdir -p /tmp/busena
-          for f in seen.test.json state.test.json; do [ -f "$f" ] && cp "$f" /tmp/busena/; done
-          for i in 1 2 3 4 5; do
-            git fetch origin "$BRANCH"
-            git reset --hard "origin/$BRANCH"
-            for f in seen.test.json state.test.json; do [ -f "/tmp/busena/$f" ] && cp "/tmp/busena/$f" "$f" && git add "$f"; done
-            if git diff --cached --quiet; then echo "Busena nepasikeite"; break; fi
-            git commit -m "Testine busena"
-            if git push origin "HEAD:$BRANCH"; then echo "Busena issaugota"; break; fi
-            echo "Nepavyko issaugoti ($i) – bandau dar karta"; sleep $((i * 5))
-          done
+          git add -A
+          git commit -q -m "Testine busena $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push -q --force "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY" \
+            "HEAD:refs/heads/$STATE_BRANCH"
+          echo "Testine busena issaugota sakoje '$STATE_BRANCH'"
