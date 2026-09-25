@@ -3,6 +3,84 @@
 Ieško iPhone 8 … 17 Pro Max, kurie pigesni už rinkos kainą, ir siunčia juos į Telegram.
 Šaltiniai įjungiami `config.json` → `"SOURCES": ["vinted", "pirkpard"]` (galimi: `vinted`, `pirkpard`, `skelbiu`).
 
+## Kas nauja v39
+
+**Vinted LT sąrašas nėra lietuviškas.** Išmatuota gyvai 2026-09-25 (`api.vinted.lt`,
+paieška „iphone“, 45 telefonai): **PL 31, FI 6, LT 5, LV 2, EE 1** – Lietuvos vos ~11 %.
+
+Dar svarbiau: naujasis katalogo API pardavėjo objekte grąžina **tik** `business`, `id` ir
+`login` – nei šalies, nei miesto. Šalis paaiškėdavo tik atidarius skelbimą, t. y. **jau po**
+`market.observe()`. Todėl užsienio skelbimas, atmestas ankstesniame etape (pvz. „ne tarp
+pigiausių“), iki šalies patikros taip ir nepriedavo ir **likdavo Lietuvos rinkos istorijoje
+kaip vietinė kaina**. Kadangi PL kainos sistemiškai žemesnės (jos perskaičiuotos iš PLN),
+Lietuvos rinkos kaina buvo nuvertinta, o „pigiausių 15 %“ skaičiuojami lenkų atžvilgiu –
+tikri LT dealai atmesti kaip vidutiniai.
+
+- **Šalis nustatoma prieš rinkos statistiką** (`Run.resolve_countries`). Užsienio skelbimas
+  iškart gauna `skip_reason` ir į istoriją nebepatenka visai; tai matosi ir `/statistika`
+  (`salis (PL): 24`).
+- **Pardavėjų šalys įsimenamos** (`state.json` → `sellers`), tad pardavėjas su 20 skelbimų
+  kainuoja vieną užklausą, ne dvidešimt. Antrame paleidime jau pusė šalių ateina iš atminties.
+- **Užklausų riba** – `SELLER_COUNTRY_LOOKUPS` (40). Gyvai matyta, kad po ~45 užklausų iš
+  eilės `www.vinted.lt/api/v2/users/<id>` atsako **HTTP 429**, o `api.vinted.lt` to adreso
+  **neturi visai** (visada 404) – anksčiau kiekvienas pardavėjas kainavo dvi užklausas, iš
+  kurių antra beviltiška. Dabar: 429 → šiame paleidime nebeklausiama, 404 → antro adreso
+  nebandome.
+- **Nepatikrinta ≠ lietuviška.** Kol šalis nežinoma, skelbimas rinkos kainoje
+  neskaičiuojamas (`state.json` → `"x": "salis?"`), o į jį pačią pretenduojama tik jei tekste
+  yra tikrai lietuviškų žodžių (`UNKNOWN_COUNTRY_NEEDS_LT_TEXT`). „iPhone 12 64g“ be nė vieno
+  lietuviško žodžio dažniausiai yra lenkų skelbimas, kurio kalbos filtras nepagauna.
+- **Neprarandami dėl ribos.** Jei šalies nepavyko nustatyti *tik* dėl užklausų ribos ar 429,
+  skelbimas nežymimas matytu ir tikrinamas dar iki `DETAIL_RETRIES` kartų. Likusios
+  užklausos atiduodamos jau matytiems, bet dar nepatikrintiems skelbimams – kiekvienas
+  patikrintas grąžina į rinkos kainą dar vieną tikrą lietuvišką kainą.
+- **Ribotos užklausos eina protingiau:** pirma tikrinamos apvalios kainos. Perskaičiuota PLN
+  kaina beveik visada su centais (692,64 €), o tikra lietuviška – apvali (550 €). Iš 31
+  lenkiško skelbimo **visi 31** buvo su centais, o iš tikrų LT telefonų – nė vienas.
+- **`VINTED_BROWSE_PAGES: 3 → 6`.** Kadangi lietuviškų sąraše tik ~11 %, 3 puslapiai duoda
+  vos ~30 vietinių – „pigiausių“ palyginimui (`RANK_RECENT_DAYS`) tokių pat telefonų
+  nesusidaro. Puslapiai pigūs, o jau matyti skelbimai pardavėjų užklausų nebereikalauja.
+
+> **Pirmą dieną rinkos kainos bus „apytikslės“.** Sena istorija buvo sudaryta iš mišraus
+> sąrašo, o naujoji auga tik iš patvirtintų lietuviškų. Kol susikaups `MIN_SAMPLES` (8) vieno
+> modelio kainų, log'e matysi `-> naudojama: … (apytiksl.)` ir `(retas modelis – vertinta
+> pagal nuolaidą)`. Per kelias valandas (backfill po ~40 patikrų per paleidimą) tai susitvarko.
+
+## Kas nauja v38
+
+Antroji kodo peržiūra (2026-09). Visi punktai turi testus (`tests/test_limits.py`).
+
+- **Būsena nebegali sugesti nutrūkus paleidimui.** `state.json` ir `seen.json` rašomi į
+  laikiną failą ir tik tada pervadinami (`os.replace`) – arba visas, arba nieko. Anksciau
+  GitHub'ui nutraukus darbą (laiko limitas, `cancel`) failas likdavo pusiau įrašytas, ir
+  kitas paleidimas pradėdavo nuo nulio: dingdavo visa rinkos istorija, kalibracija ir
+  sekami pranešimai. Papildomai laikoma `.bak` kopija – jei pagrindinis failas vis tiek
+  būtų sugadintas, paimama ji.
+- **Būsena nebekaupiama kodo šakoje.** Anksčiau `state.json` (~1 MB) buvo commit'inamas į
+  tą pačią šaką kas 10 min. – 144 commit'ai per dieną, kelios šimtos MB per mėnesį, kurių
+  iš git istorijos nebeišimsi. Dabar ji gyvena šakoje **`busena`**, kuri kas kartą
+  perrašoma (`push --force`): ten visada lieka vienas commit'as. Žr. „Būsenos šaka“.
+- **Nepavykęs Telegram siuntimas nebesunaikina dealo.** Jei Telegram neatsako (tinklo
+  klaida), skelbimas anksčiau vis tiek būdavo pažymimas matytu ir „pranešu“ – geras
+  pasiūlymas dingdavo visam laikui. Dabar žymės nuimamos ir kitas paleidimas bando dar kartą.
+- **Pranešimų lavinos apsauga** – `MAX_ALERTS_PER_RUN` (20; 0 – be ribos). Jei būsena kada
+  nors pasimestų, visi skelbimai atrodytų nauji ir Telegram gautų dešimtis kortelių iš karto
+  (o grupėje leidžiama 20 žinučių per minutę). Likusieji nepažymimi matytais – juos įvertina
+  kitas paleidimas.
+- **Bot'o token'as nebepatenka į logą.** `requests` klaidos tekste yra visas adresas, o
+  jame – token'as (`.../bot123:ABC/sendMessage`). Dabar jis pakeičiamas `***`.
+- **Tas pats skelbimas nebetikrinamas dukart.** „Pardavimų patikra“ ir „pranešimų
+  rezultatai“ tikrino tą pačią būseną atskirai – Vinted tai dvi užklausos ir dvi pauzės tam
+  pačiam puslapiui. Dabar per paleidimą užklausiama kartą, o rezultatų patikros žinia iškart
+  patenka ir į rinkos istoriją (savikalibracija pamato pardavimą per minutes, ne po 2 dienų).
+- **Sugedusi komanda nebesiciklina.** Klaida vykdant Telegram komandą nutraukdavo visą
+  žingsnį, `telegram_offset` nebūdavo įrašytas, ir ta pati komanda būdavo vykdoma kas
+  10 min. be galo. Dabar klaida praneša tik apie save, o offset įrašomas visada.
+- **`/start` su papildoma eilute** („/start\nlabas“) anksčiau nebuvo atpažįstamas, ir žmogus
+  negaudavo asmeninių žinučių, nors ir parašė botui.
+- **Pauzė (`/pauze`) nebeleidžia darbo veltui**: patikrinama prieš skelbimo puslapį, tad
+  kainų istorija toliau kaupiasi, bet dešimtys puslapių su pauzėmis nebekraunami.
+
 ## Kas nauja v37
 
 Pataisymai po kodo peržiūros (2026-09). Visi turi testus (`tests/test_robustness.py`,
@@ -65,6 +143,24 @@ Pataisymai po kodo peržiūros (2026-09). Visi turi testus (`tests/test_robustne
 | `.github/workflows/vinted.yml` | botas kas 10 min. (GitHub Actions) |
 | `.github/workflows/tests.yml` | testai, kai įkeli naują kodą |
 
+### Būsenos šaka (`busena`)
+
+GitHub'e `seen.json` ir `state.json` išsaugomi **atskiroje šakoje `busena`**, kuri kas kartą
+perrašoma iš naujo (`push --force`), tad joje visada lieka vienas commit'as. Taip kodo
+istorija nebeauga: anksčiau būsena buvo commit'inama į kodo šaką kas 10 min., o `state.json`
+yra apie 1 MB – per mėnesį susidarydavo keli šimtai MB, kurių iš git istorijos nebeišimsi.
+
+Pirmas paleidimas po atnaujinimo šakos dar neranda ir paima tai, kas įkelta repozitorijoje,
+tad niekas nedingsta. Po jo:
+
+1. patikrink, ar Actions log'e rašo `Busena issaugota sakoje 'busena'`;
+2. tada seni `seen.json` / `state.json` kodo šakoje nebenaudojami – juos gali ištrinti
+   (bet **tik po** 1 punkto: kol šakos nėra, jie yra vienintelė būsena).
+
+Šakos turinį pamatysi GitHub'e pasirinkęs šaką `busena`. Norint pradėti nuo nulio –
+tą šaką ištrink. Grįžti prie senos tvarkos: pašalink `vinted.yml` žingsnius
+„Atsiusti busena“ / „Issaugoti busena“ ir grąžink commit'inimą į kodo šaką.
+
 ## Kodo struktūra
 
 | Modulis | Atsakingas už |
@@ -79,7 +175,7 @@ Pataisymai po kodo peržiūros (2026-09). Visi turi testus (`tests/test_robustne
 | `risk.py` | apgavysčių požymiai |
 | `market.py` | rinkos kainos, pardavimai, kainų sumažėjimai |
 | `tracker.py` | pranešimų rezultatai: ar nupirkta ir per kiek, savaitės ataskaita |
-| `state.py` | `seen.json`, `state.json` |
+| `state.py` | `seen.json`, `state.json` (saugus įrašymas), pardavėjų šalių atmintis |
 | `telegram.py` | kortelės, žinutės, komandų gavimas |
 | `commands.py` | Telegram komandos |
 | `finder.py` | pagrindinė eiga |
@@ -164,6 +260,9 @@ niekada neprieitų.
 - API nebeturi `catalog_id`, `brand_id` ir įkėlimo laiko, todėl kategorijos filtras
   ir „Įkelta prieš X" eilutė Vinted skelbimams neveikia. Būklė imama iš
   `item_box.second_line`.
+- **Pardavėjo šalies kataloge nėra** (`user` = tik `business`, `id`, `login`), o sąraše
+  Lietuvos skelbimų tik ~11 %. Šalis imama iš `/api/v2/users/<id>` dar prieš rinkos
+  statistiką – žr. „Kas nauja v39“ ir `Run.resolve_countries`.
 
 ### Pirkpard.lt ypatumai
 
@@ -218,8 +317,10 @@ Pigiausi 15 % dabartinių skelbimų lieka pigiausiais nepriklausomai nuo to, ar 
 vertinimas teisingas. Tai patikrina testas `test_rank_ignores_inflated_manual_price`:
 su dirbtinai išpūsta 400 € kaina nuolaidos būdas 300 € telefoną laiko dealu, šis — ne.
 
-Kortelėje matosi, kodėl skelbimas atėjo: *„2-as pigiausias iš 23 dabar parduodamų
-tokių pat (128 GB), 140–280 €"*. Su garsu siunčiamas tik pats pigiausias.
+Kodėl skelbimas atėjo, kortelėje rašoma įjungus `"SHOW_RANK": true`: *„2-as pigiausias iš 23
+dabar parduodamų tokių pat (128 GB), 140–280 €"*. Numatytai išjungta, kad kortelė būtų
+trumpesnė – atrankai vieta naudojama visada, o log'e ji matoma ir taip.
+Su garsu siunčiamas tik pats pigiausias.
 
 „Dabar parduodami" reiškia matytus kataloge per paskutines `RANK_RECENT_DAYS` (2) dienas.
 Pirmoje versijoje čia buvo 30 dienų, ir į palyginimą patekdavo jau seniai parduoti
@@ -228,8 +329,9 @@ greičiausiai, tad seni pigūs įrašai nustumdavo tikrus dealus į vidurį ir j
 atmetami. Tam yra testas `test_same_data_with_old_window_would_bury_the_deal`.
 
 Užsienio skelbimai (Vinted rodo ir Lenkijos: „Sprzedam, stan idealny") atpažįstami
-jau iš pavadinimo — prieš atidarant skelbimo puslapį. Jie atmetami ir **neįtraukiami
-į rinkos kainas bei palyginimą**, nes kita šalis — kita rinka.
+dviem būdais, abu — prieš atidarant skelbimo puslapį: iš pavadinimo kalbos ir iš pardavėjo
+šalies (`/api/v2/users/<id>`). Jie atmetami ir **neįtraukiami į rinkos kainas bei
+palyginimą**, nes kita šalis — kita rinka. Tai ne smulkmena: sąraše jų ~89 % (žr. „Kas nauja v39“).
 
 Kokybės filtrai (defektai, baterija, būklė, kalba, šalis) lieka — kitaip pigiausi
 visada būtų sugedę telefonai. Ilgai kabantys skelbimai (`ASKING_MAX_AGE_DAYS`) į
