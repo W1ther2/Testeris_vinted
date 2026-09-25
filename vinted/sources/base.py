@@ -60,6 +60,20 @@ class Source:
         """'active' / 'sold' / 'gone' / 'unknown'. `url` – issaugotas adresas, jei yra."""
         return "unknown"
 
+    def seller_country(self, listing):
+        """Pardavejo salies kodas ('LT'), kai ji pasakoma jau sarase.
+
+        Lietuviskos svetaines (Skelbiu, Pirkpard) salį zino is karto. Vinted – ne:
+        jo katalogas grazina tik pardavejo ID, tad ten sis metodas eina uzklausti
+        (zr. vinted_source.py). Butina ZINOTI pries rinkos statistika: uzsienio
+        skelbimu kainos negali patekti i Lietuvos rinkos kaina."""
+        return (listing.seller or {}).get("country")
+
+    # Ar `seller_country()` eina i tinkla (tada uzklausu kiekis ribojamas).
+    country_needs_request = False
+    # True, kai saltinis salies uzklausu siame paleidime nebepriima (pvz. HTTP 429).
+    country_lookups_blocked = False
+
     # --- pagalbinės -------------------------------------------------------
     def local_ids(self, seen):
         """Is bendro uid rinkinio ({'vinted:1', 'skelbiu:2'}) palieka tik siam

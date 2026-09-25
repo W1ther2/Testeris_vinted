@@ -16,6 +16,7 @@ SELLER_KEYS = ("country", "rating", "reviews", "sold", "account_age_days")
 class VintedSource(Source):
     name = "vinted"
     label = "Vinted"
+    country_needs_request = True     # katalogas salies nebeduoda – reikia pardavejo uzklausos
 
     def __init__(self, client=None, sleep=time.sleep):
         super().__init__()
@@ -81,6 +82,21 @@ class VintedSource(Source):
             seller=seller_from_dict(user), photo_count=get_photo_count(raw),
             created_at=get_created_at(raw), raw=raw,
         )
+
+    @property
+    def country_lookups_blocked(self):
+        """Vinted uzdare pardaveju API siame paleidime (429) – toliau klausti nera prasmes."""
+        return bool(getattr(self.client, "users_blocked", ""))
+
+    def seller_country(self, listing):
+        """Pardavejo salis. Nuo 2026-09 katalogo API pardavejo objekte grazina tik
+        `business`, `id` ir `login` – nei salies, nei miesto. Patikrinta gyvai: 45 is 45
+        skelbimu salį pasake /api/v2/users/<id>, tad ji imam is ten (vienas pardavejas =
+        viena uzklausa, atsakymai kesuojami ir paleidime, ir state.json)."""
+        country = (listing.seller or {}).get("country")
+        if country or not listing.seller_id:
+            return country
+        return seller_from_dict(self.client.fetch_user(_as_id(listing.seller_id))).get("country")
 
     def note_ids(self, listing):
         """Kategorijos / prekes zenklo ID statistika – tik tikriems telefonams."""
