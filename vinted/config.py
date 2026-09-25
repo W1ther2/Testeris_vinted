@@ -29,7 +29,11 @@ DEFAULTS = {
     # false = ieskoti kiekvieno modelio atskirai pagal SEARCH_QUERIES.
     "VINTED_BROWSE_ALL": True,
     "VINTED_QUERIES": ["iphone"],
-    "VINTED_BROWSE_PAGES": 3,        # po 96 skelb. = ~290 naujausiu, iprastam paleidimui
+    # Po 96 skelb. Gyvai matyta, kad „iphone“ sarase Lietuvos skelbimu tik ~11 % (likusieji –
+    # PL, FI, LV), tad 3 puslapiai duoda vos ~30 lietuvisku. Kad „pigiausiu“ palyginimui
+    # (RANK_RECENT_DAYS) uztektu tokiu pat telefonu, imam giliau – puslapiai pigus, o jau
+    # matyti skelbimai pardavejo uzklausu nebereikalauja.
+    "VINTED_BROWSE_PAGES": 6,
     "VINTED_FULL_SCAN_PAGES": 10,    # pirmam paleidimui (seen.json tuscias)
     "VINTED_MAX_PAGES": 10,          # Vinted giliau neleidzia: 11-as puslapis = HTTP 400
 
@@ -164,6 +168,17 @@ DEFAULTS = {
     "ALLOWED_COUNTRY_CODES": ["LT"],
     "FILTER_BY_COUNTRY": True,
     "REQUIRE_KNOWN_COUNTRY": False,
+    # Kiek pardavejo salies uzklausu per viena paieska. Vinted katalogas salies nebeduoda,
+    # o zinoti ja BUTINA pries rinkos statistika (uzsienio kainos iskreipia Lietuvos rinka).
+    # Tikrinami tik nauji telefonai, atsakymai isimenami (state.json "sellers"), tad
+    # praktikoje uzklausu maziau nei nauju skelbimu. 0 = neuzklausti.
+    # Gyvai matyta: po ~45 uzklausu is eiles Vinted atsako HTTP 429, tad daugiau nei ~40
+    # rasyti nera prasmes – nepatikrintus skelbimus ivertins kitas paleidimas.
+    "SELLER_COUNTRY_LOOKUPS": 40,
+    # Kai salies nustatyti nepavyko: praleisti tik tada, jei tekste yra tikrai lietuvisku
+    # zodziu. „iPhone 12 64g“ be lietuvisko zodzio daznai yra lenku skelbimas, kurio
+    # kalbos filtras nepagauna.
+    "UNKNOWN_COUNTRY_NEEDS_LT_TEXT": True,
     "MIN_SELLER_RATING": 0,
     "MIN_SELLER_REVIEWS": 0,
     "SELLER_NEW_ACCOUNT_DAYS": 30,   # jaunesne paskyra = rizikos pozymis

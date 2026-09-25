@@ -70,6 +70,7 @@ class VintedClient:
         self._printed_first_item = False
         self.blocked_queries = 0        # kiek paieskų is eiles Vinted atmete (403)
         self.filters_off = False        # True, kai kategoriju filtras neveikia (grazina 0 skelbimu)
+        self.users_blocked = ""         # netuscia = pardaveju API siame paleidime nebeatsako (429)
 
     # --- sesija ---------------------------------------------------------
     @staticmethod
@@ -265,11 +266,20 @@ class VintedClient:
 
     # --- pardavejas -----------------------------------------------------
     def fetch_user(self, user_id):
-        """Pardavejo profilis per Vinted API (gali buti blokuojamas – tada {})."""
+        """Pardavejo profilis per Vinted API (gali buti blokuojamas – tada {}).
+
+        Butent is cia paaiskeja pardavejo salis: katalogas jos nebeduoda (2026-09 grazina
+        tik `business`, `id`, `login`). Du dalykai, isaiskinti gyvai:
+        - po maždaug 45 uzklausu is eiles www.vinted.lt atsako HTTP 429. Tada toliau klausti
+          nera prasmes – pazymim `users_blocked` ir siame paleidime salis imama tik is atminties;
+        - api.vinted.lt sio adreso NETURI (visada 404), tad ten kreipiamasi tik jei pirmasis
+          atsake kazka kita nei 404/429 – kitaip kiekvienas pardavejas kainuotu dvi uzklausas."""
         if not user_id:
             return {}
         if user_id in self._user_cache:
             return self._user_cache[user_id]
+        if self.users_blocked:
+            return {}
         user = {}
         for base in (BASE, API_BASE):
             try:
@@ -279,8 +289,14 @@ class VintedClient:
                     if isinstance(data, dict) and isinstance(data.get("user"), dict):
                         user = data["user"]
                         break
-                else:
-                    debug(f"vartotojo {user_id} API ({base}): HTTP {r.status_code}")
+                if r.status_code == 429:
+                    self.users_blocked = "HTTP 429 – per daug pardaveju uzklausu"
+                    debug(f"vartotoju API riba ({base}): {self.users_blocked}")
+                    break
+                if r.status_code == 404:
+                    debug(f"vartotojo {user_id} nera ({base}: HTTP 404)")
+                    break
+                debug(f"vartotojo {user_id} API ({base}): HTTP {r.status_code}")
             except Exception as e:
                 debug(f"vartotojo {user_id} API klaida: {e}")
         self._user_cache[user_id] = user

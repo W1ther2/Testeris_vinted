@@ -127,6 +127,24 @@ class State:
         self.last_report = float(data.get("last_report") or 0)
         # {uid: {"n": kiek kartu nepavyko atidaryti skelbimo, "t": kada paskutini karta}}
         self.detail_failures = data.get("detail_failures") or {}
+        # {"vinted:123": ["PL", diena]} – pardavejo salis. Naujasis Vinted katalogo API
+        # salies nebeduoda (tik business/id/login), tad ji atskirai uzklausiama vienai
+        # pardavejo paskyrai. Kesas reiskia, kad tas pats pardavejas su 20 skelbimu
+        # kainuoja viena uzklausa, o ne 20.
+        self.sellers = data.get("sellers") or {}
+
+    SELLER_MAX_ENTRIES = 20000
+
+    def seller_country(self, key):
+        """Isimtas pardavejo salies kodas arba None."""
+        e = self.sellers.get(str(key))
+        if isinstance(e, (list, tuple)) and e:
+            return e[0] or None
+        return e or None if isinstance(e, str) else None
+
+    def remember_seller(self, key, country, day=None):
+        if key and country:
+            self.sellers[str(key)] = [str(country), int(day if day is not None else time.time() // 86400)]
 
     def note_detail_failure(self, uid, now=None):
         """Dar vienas nepavykes skelbimo atidarymas. Grazina, kiek kartu is viso."""
@@ -173,6 +191,12 @@ class State:
         week_ago = time.time() - 7 * 86400
         self.detail_failures = {k: v for k, v in dict(self.detail_failures).items()
                                 if isinstance(v, dict) and v.get("t", 0) >= week_ago}
+        if len(self.sellers) > self.SELLER_MAX_ENTRIES:
+            # Pardavejo salis nesikeicia, tad senumas nesvarbus – tik dydis.
+            newest = sorted(dict(self.sellers).items(),
+                            key=lambda kv: (kv[1][1] if isinstance(kv[1], (list, tuple)) and len(kv[1]) > 1 else 0),
+                            reverse=True)
+            self.sellers = dict(newest[: self.SELLER_MAX_ENTRIES])
         data = {"market_version": self.MARKET_VERSION, "market": self.market.to_dict(),
                 "telegram_offset": self.telegram_offset,
                 "overrides": self.overrides, "heartbeat": self.heartbeat, "last_run": self.last_run,
@@ -180,5 +204,5 @@ class State:
                 "users": self.users, "source_alerts": self.source_alerts,
                 "source_zero": self.source_zero, "source_down": self.source_down,
                 "tracked": self.tracker.to_dict(), "last_report": self.last_report,
-                "detail_failures": self.detail_failures}
+                "detail_failures": self.detail_failures, "sellers": self.sellers}
         write_json(path, data, ensure_ascii=False, separators=(",", ":"))

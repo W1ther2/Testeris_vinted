@@ -125,11 +125,18 @@ class Market:
             if not condition_ok(l.condition, "Gera"):      # patenkinamos bukles – ne rinkos kaina
                 continue
             iid = l.uid
+            # Skelbimas, kurio pardavejo salies nustatyti nepavyko, i Lietuvos rinkos kaina
+            # neitraukiamas, kol salis nepatvirtinta (`confirm_country`). Gyvai matyta, kad
+            # „iphone“ sarase Lietuvos yra tik ~11 %, tad nepatikrintas skelbimas dazniausiai
+            # yra uzsienio. Irasa vis tiek saugom: kitaip nebematytume atpigimu.
+            unverified = "salis?" if l.country_unverified else None
             e = self.items.get(iid)
             if e is None:
                 storage = extract_storage(title) or ""
                 entry = {"m": model, "s": storage, "p": round(price, 2),
                          "f": day, "l": day, "c": day, "st": "active"}
+                if unverified:
+                    entry["x"] = unverified
                 sh = seller_hash(l.source, l.seller_id)
                 if sh:
                     entry["sh"] = sh
@@ -149,6 +156,8 @@ class Market:
                         entry["qf"] = round(self.sale_factor(), 4)
                 self.items[iid] = entry
                 continue
+            if not unverified and e.get("x") == "salis?":
+                e.pop("x", None)              # salis paaiskejo (pvz. is pardaveju atminties)
             # Atpigimas skaiciuojamas nuo kainos, uz kuria paskutini karta VERTINOM – kitaip
             # 300 -> 290 -> 280 -> 270 (kiekviena karta < 5 %) niekada nebutu pastebeta.
             ref = e.get("ev") or e["p"]
@@ -186,6 +195,19 @@ class Market:
         e = self.items.get(with_source(str(item_id)))
         if e is not None:
             e["x"] = reason
+
+    @locked
+    def needs_country(self, item_id):
+        """True, jei irasas laukia salies patvirtinimo (kol kas neskaiciuojamas i rinka)."""
+        e = self.items.get(with_source(str(item_id)))
+        return bool(e) and e.get("x") == "salis?"
+
+    @locked
+    def confirm_country(self, item_id):
+        """Salis patikrinta ir tinka – irasas vel skaiciuojamas i rinkos kaina."""
+        e = self.items.get(with_source(str(item_id)))
+        if e is not None and e.get("x") == "salis?":
+            e.pop("x", None)
 
     @locked
     def already_alerted_at(self, item_id, price):

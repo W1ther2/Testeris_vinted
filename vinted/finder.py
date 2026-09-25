@@ -10,7 +10,7 @@ import time
 import traceback
 
 from . import config, commands
-from .language import detect_foreign_language
+from .language import detect_foreign_language, looks_lithuanian
 from .listing import split_uid
 from .phone import (detect_model, is_accessory, find_defects, extract_storage, extract_battery,
                     CONDITION_FACTOR, estimate_value, estimate_profit, MODEL_ORDER, condition_ok,
@@ -41,6 +41,7 @@ class Run:
         self.step_errors = []       # papildomi darbai, kurie nuluzo (pranesama kas valanda)
         self.statuses = {}          # {uid: busena} – tam paciam skelbimui neuzklausiam du kartus
         self.limit_announced = False  # ar jau parasem, kad pasiekta MAX_ALERTS_PER_RUN riba
+        self.country_limited = set()   # saltiniai, kuriems siame paleidime neuzteko salies uzklausu
         # Saltiniai gali suktis lygiagreciai, todel bendri duomenys (rinkos istorija,
         # matytu sarasas, Telegram) liecami tik su sia spyna.
         self.lock = threading.RLock()
@@ -241,9 +242,30 @@ class Run:
         seller = detail.seller or listing.seller or {}
         country = seller.get("country")
         if c["FILTER_BY_COUNTRY"]:
-            ok = (country in c["ALLOWED_COUNTRY_CODES"]) if country else (not c["REQUIRE_KNOWN_COUNTRY"])
+            if country:
+                ok = country in c["ALLOWED_COUNTRY_CODES"]
+            elif c["REQUIRE_KNOWN_COUNTRY"]:
+                ok = False
+            elif c["UNKNOWN_COUNTRY_NEEDS_LT_TEXT"]:
+                # Salies nustatyti nepavyko (pardavejo uzklausa neatsake ar pasiekta riba).
+                # Tada reikia POZITYVAUS lietuviskumo: „iPhone 12 64g“ be jokio lietuvisko
+                # zodzio daznai yra lenku skelbimas, kurio kalbos filtras nepagauna.
+                ok = looks_lithuanian(detail.title or title, description)
+            else:
+                ok = True
             if not ok:
-                return self.reject_bad(uid, "salis", "salis", f"{country}: {title[:40]}")
+                # Salis nezinoma tik todel, kad siame paleidime pasiekta uzklausu riba (ar
+                # Vinted atsake 429) – tai laikina. Nezymim matytu, kad kitas paleidimas
+                # patikrintu is tikruju, o ne nurasytu tvarkingo lietuvisko skelbimo.
+                if not country and source.name in self.country_limited \
+                        and self.retried_later(uid, "cc:", "šalies nustatyti nepavyko", title):
+                    return None
+                return self.reject_bad(uid, "salis", "salis",
+                                       f"{country or 'šalis nežinoma, tekstas ne lietuviškas'}: {title[:40]}")
+            if country:
+                self.state.market.confirm_country(uid)     # vel skaiciuojam i rinkos kaina
+                with self.lock:
+                    self.state.forget_detail_failure("cc:" + uid)
         rating, reviews = seller.get("rating"), seller.get("reviews")
         if rating is not None and reviews is not None and (
                 rating < c["MIN_SELLER_RATING"] or reviews < c["MIN_SELLER_REVIEWS"]):
@@ -287,12 +309,23 @@ class Run:
 
     def detail_failed(self, uid, title):
         """Skelbimo puslapis neatsidare. Iki DETAIL_RETRIES kartu – bandom kitame paleidime."""
-        with self.lock:
-            n = self.state.note_detail_failure(uid)
-        if n < max(1, int(config.cfg["DETAIL_RETRIES"])):
-            self.new_seen.pop(uid, None)          # nepazymim matytu – kitas paleidimas bandys dar karta
-            return self.reject("skelbimo atidaryti nepavyko – bandysiu vėliau", title[:45])
+        if self.retried_later(uid, "", "skelbimo atidaryti nepavyko", title):
+            return None
         return self.reject("skelbimo atidaryti nepavyko", title[:45])
+
+    def retried_later(self, uid, prefix, reason, title):
+        """Laikina nesekme (puslapis neatsidare, pasiekta salies uzklausu riba).
+
+        Grazina True, kai skelbimas atidedamas: matytu jo nezymim, tad kitas paleidimas
+        bandys dar karta. Bet ne be galo – po DETAIL_RETRIES kartu grazina False, ir
+        skambinantysis atmeta galutinai."""
+        with self.lock:
+            n = self.state.note_detail_failure(prefix + uid)
+        if n >= max(1, int(config.cfg["DETAIL_RETRIES"])):
+            return False
+        self.new_seen.pop(uid, None)
+        self.reject(f"{reason} – bandysiu vėliau", title[:45])
+        return True
 
     @staticmethod
     def suspicious_ratio(rank, price):
@@ -540,6 +573,100 @@ class Run:
             if lang and lang not in allowed:
                 listing.skip_reason = f"kalba ({lang}, pagal pavadinimą)"
 
+    def resolve_countries(self, source, listings):
+        """Pardavejo salis – PRIES rinkos statistika.
+
+        Kodel butent cia: Vinted katalogas (nuo 2026-09) salies nebeduoda, o ja pasako
+        tik pardavejo uzklausa. Anksciau ji buvo daroma atidarant skelbima, t. y. JAU PO
+        `market.observe()`. Gyvai patikrinta: is 45 „iphone“ paieskos telefonu 31 buvo
+        lenku, 6 suomiu, 2 latviu ir tik 5 lietuviu. Uzsienio skelbimas, atmestas ankstyvame
+        etape (pvz. „ne tarp pigiausiu“), iki pardavejo taip ir nepriejo ir likdavo istorijoje
+        kaip Lietuvos kaina – o PL kainos sistemiskai zemesnes, tad Lietuvos rinkos kaina
+        buvo nuvertinta, o „pigiausiu 15 %“ skaiciuojami lenku atzvilgiu.
+
+        Uzklausu kiekis ribotas (`SELLER_COUNTRY_LOOKUPS`), tad tikrinami tik nauji
+        telefonai, o pirmi eileje – apvalios kainos: perskaiciuota PLN kaina beveik visada
+        su centais (692.64 €), o tikra lietuviska – apvali (550 €)."""
+        c = config.cfg
+        if not c["FILTER_BY_COUNTRY"]:
+            return
+        allowed = set(c["ALLOWED_COUNTRY_CODES"])
+        needs_request = bool(getattr(source, "country_needs_request", False))
+        # Uzklausos isjungtos (SELLER_COUNTRY_LOOKUPS = 0): salis kaip ir anksciau paaiskes
+        # atidarant skelbima, o rinkos istorija nefiltruojama – kitaip Vinted skelbimu i ja
+        # nepatektu nei vieno.
+        resolution_on = needs_request and int(c["SELLER_COUNTRY_LOOKUPS"]) > 0
+        budget = int(c["SELLER_COUNTRY_LOOKUPS"]) if needs_request else -1
+        from_cache, asked, unknown = 0, 0, 0
+        todo, backfill = [], []
+        for listing in listings:
+            if listing.skip_reason:
+                continue
+            title = listing.title or ""
+            if listing.price is None or not detect_model(title) or is_accessory(title):
+                continue                       # ne telefonas – i rinkos kaina vis tiek nepateks
+            key = f"{listing.source}:{listing.seller_id}"
+            known = ((listing.seller or {}).get("country")
+                     or (self.state.seller_country(key) if listing.seller_id else None))
+            if known:
+                listing.seller = {**(listing.seller or {}), "country": known}
+                from_cache += 1
+                continue
+            if listing.uid in self.new_seen:
+                # Jau matytas, bet salies vis dar nezinom – rinkos kainoje jis neskaiciuojamas.
+                # Tokie tikrinami po naujuju: jei uzklausu liko (o iprastame paleidime nauju
+                # skelbimu vos keliolika), kiekvienas patikrintas grazina i rinka dar viena
+                # tikra lietuviska kaina.
+                if self.state.market.needs_country(listing.uid):
+                    backfill.append(listing)
+                continue
+            todo.append(listing)
+        if needs_request and not resolution_on:
+            todo, backfill = [], []
+        def cents_last(l):
+            """Apvalios kainos – pirmos. Perskaiciuota PLN kaina beveik visada su centais
+            (692.64 €), o lietuviska – apvali (550 €), tad ribotos uzklausos eina tiems,
+            kurie labiau panasus i lietuviskus."""
+            return abs(l.price - round(l.price)) > 0.004
+
+        todo.sort(key=cents_last)
+        backfill.sort(key=cents_last)
+        for listing in todo + backfill:
+            if budget == 0 or source.country_lookups_blocked or self.out_of_time():
+                with self.lock:
+                    self.country_limited.add(source.name)   # laikina: kitas paleidimas patikrins
+                break
+            country = source.seller_country(listing)
+            if needs_request:
+                budget -= 1
+                asked += 1
+                self.sleep(c["DETAIL_SLEEP_SECONDS"])
+            if not country:
+                unknown += 1
+                if source.country_lookups_blocked:
+                    with self.lock:
+                        self.country_limited.add(source.name)
+                continue
+            listing.seller = {**(listing.seller or {}), "country": country}
+            if listing.seller_id:
+                with self.lock:
+                    self.state.remember_seller(f"{listing.source}:{listing.seller_id}", country)
+        for listing in listings:
+            country = (listing.seller or {}).get("country")
+            if country and country not in allowed and not listing.skip_reason:
+                listing.skip_reason = f"salis ({country})"
+            elif not country and resolution_on and not listing.skip_reason:
+                # Salies nezinom – i rinkos kaina neitraukiam (zr. market.observe)
+                listing.country_unverified = True
+        if asked or from_cache or todo:
+            left = sum(1 for l in todo if not (l.seller or {}).get("country"))
+            parts = [f"{asked} uzklausu", f"{from_cache} is atminties"]
+            if unknown:
+                parts.append(f"{unknown} be atsakymo")
+            if left > unknown:
+                parts.append(f"{left - unknown} nepatikrinta (riba {c['SELLER_COUNTRY_LOOKUPS']})")
+            print("  Pardavejo salys: " + ", ".join(parts))
+
     def scan(self, source, seen, pages):
         """Viena saltinio perziura. Grazina, kiek skelbimu gauta.
 
@@ -591,6 +718,10 @@ class Run:
             self.last_error = source.last_error or self.last_error
             fetched += len(listings)
             self.mark_foreign(listings)
+            # Salis butina zinoti PRIES observe(): uzsienio kainos neturi patekti
+            # nei i Lietuvos rinkos kaina, nei i „pigiausiu“ palyginima.
+            self.step(f"Pardavėjų šalys ({source.label})",
+                      lambda: self.resolve_countries(source, listings))
             drops = self.state.market.observe(listings)
             self.examples, sent_before = [], len(self.alerts)
             for listing in listings:
