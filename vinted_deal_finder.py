@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-iPhone deal finder v37.
+iPhone deal finder v38.
 
 Iesko iPhone 8 … 17 Pro Max, kurie pigesni uz rinkos kaina (ivertinus bukle,
 baterija ir defektus), ir siuncia juos i Telegram.
@@ -10,7 +10,7 @@ vienas failas vinted/sources/, zr. README.
 
 Paleidimas:   python vinted_deal_finder.py
 Reikia:       pip install -r requirements.txt
-Aplinka:      BOT_TOKEN, CHAT_ID (GitHub Secrets)
+Aplinka:      BOT_TOKEN, CHAT_ID (GitHub'e – is Secrets BOT ir TEL, zr. .github/workflows/vinted.yml)
 Failai:       config.json (nustatymai), seen.json ir state.json (issaugomi tarp paleidimu)
 Testai:       python -m unittest discover -s tests -t .
 """
