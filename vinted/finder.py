@@ -39,6 +39,8 @@ class Run:
         self.deadline = None        # kada baigti si saltini (kad kitiems liktu laiko)
         self.source_stats = {}      # {saltinis: {"fetched", "error", "crash"}} – siam paleidimui
         self.step_errors = []       # papildomi darbai, kurie nuluzo (pranesama kas valanda)
+        self.statuses = {}          # {uid: busena} – tam paciam skelbimui neuzklausiam du kartus
+        self.limit_announced = False  # ar jau parasem, kad pasiekta MAX_ALERTS_PER_RUN riba
         # Saltiniai gali suktis lygiagreciai, todel bendri duomenys (rinkos istorija,
         # matytu sarasas, Telegram) liecami tik su sia spyna.
         self.lock = threading.RLock()
@@ -159,6 +161,11 @@ class Run:
             return self.reject("per pigu (sugedęs / dalims / ne telefonas?)",
                                f"{title[:40]} {price:.0f}€ (riba {floor:.0f}€, rinka {quote.price:.0f}€)")
         self.new_seen[uid] = time.time()
+        if c["PAUSED"]:
+            # Pauze tikrinam PRIES skelbimo puslapi: kainu istorija toliau kaupiasi
+            # (ji naudinga ir per pauze), bet desimciu puslapiu ir pauzeliu po ju
+            # nebegaistam – anksciau tas pats darbas buvo nudirbamas ir isbraukiamas.
+            return self.reject("pauzė (/testi – įjungti)")
 
         # 2) Skelbimo puslapis
         detail = source.detail(listing)
@@ -258,7 +265,7 @@ class Run:
                                  total_price=listing.total_price)
 
         deal = {
-            "id": uid, "source": source.name, "source_label": getattr(source, "label", source.name),
+            "id": uid, "fp": fp, "source": source.name, "source_label": getattr(source, "label", source.name),
             "model": model, "seller_id": seller_id, "storage": storage, "title": title,
             "price": price, "url": listing.url, "photo": listing.photo or detail.photo,
             "description": description, "condition": condition, "battery": battery,
@@ -275,8 +282,6 @@ class Run:
         ratio = self.suspicious_ratio(rank, price)
         if ratio is not None and ratio < c["SUSPICIOUS_WARN_RATIO"]:
             deal["suspicious"] = {"ratio": ratio, "peer_low": rank.peer_low}
-        if c["PAUSED"]:
-            return self.reject("pauzė (/testi – įjungti)")
         self.new_seen[fp] = time.time()
         return deal
 
@@ -297,6 +302,24 @@ class Run:
         return price / rank.peer_low
 
     # --- visas paleidimas --------------------------------------------------------
+    def alert_limit_reached(self):
+        """Ar jau issiuntem tiek, kiek leidzia MAX_ALERTS_PER_RUN.
+
+        Likusiu skelbimu net nevertinam, tad matytais jie nepazymimi ir nedingsta –
+        juos ivertins kitas paleidimas. Kitaip, pasimetus busenai, visi skelbimai
+        atrodytu nauji ir Telegram'as gautu desimtis korteliu vienu ypu."""
+        limit = config.cfg["MAX_ALERTS_PER_RUN"]
+        if limit <= 0:
+            return False
+        with self.lock:
+            if len(self.alerts) < limit:
+                return False
+            if not self.limit_announced:
+                self.limit_announced = True
+                print(f"! Pasiekta {limit} pranesimu riba (MAX_ALERTS_PER_RUN) – "
+                      "likusius skelbimus vertinsiu kitame paleidime.")
+        return True
+
     def out_of_time(self):
         limit = config.cfg["MAX_RUN_MINUTES"]
         if limit > 0 and (time.time() - self.started) / 60 >= limit:
@@ -319,33 +342,63 @@ class Run:
             return
         messages, callbacks, offset = self.tg.get_updates(self.state.telegram_offset)
         told_setup = False
-        for m in messages:
-            if m["private"]:
-                reply = commands.handle_private(m, self.state)
-                print(f"Asmenine komanda ({m['name']}): {m['text'][:40]}")
-                self.tg.send_message(reply, chat_id=m["chat"])
-            elif commands.is_admin(m["user"]):
-                reply = commands.handle(m["text"], self.state)
-                if reply:
-                    print(f"Komanda ({m['name']}): {m['text'][:50]}")
-                    self.tg.send_message(reply)
-            elif not config.cfg.get("ADMIN_IDS") and not told_setup:
-                # Administratorius dar nenustatytas – anksciau komanda buvo tyliai ignoruojama,
-                # ir savininkas nesuprasdavo, kodel botas neatsako. Pasakom, ka daryti
-                # (ir jo paties ID – tai nieko neatskleidzia apie kitus).
-                told_setup = True
-                print(f"Komanda neivykdyta – ADMIN_IDS tuscias ({m['name']}, ID {m['user']}): {m['text'][:40]}")
-                self.tg.send_message(commands.admin_setup_message(m["user"]))
-            else:
-                # Grupeje komandos is kitu zmoniu ignoruojamos – nieko neatskleidziam
-                print(f"Ignoruota komanda grupeje ({m['name']}, ID {m['user']}): {m['text'][:40]}")
-        for cb in callbacks:
-            answer = commands.handle_callback(cb, self.state)
-            print(f"Mygtukas ({cb['name']}): {cb['data']} -> {answer[:40]}")
-            self.tg.answer_callback(cb["id"], answer)
-        if offset != self.state.telegram_offset:
-            self.state.telegram_offset = offset
-            self.state.save()
+        try:
+            for m in messages:
+                # Vienos komandos klaida neturi nutraukti kitu IR (svarbiausia) negali
+                # sustabdyti offset'o irasymo: neirasytas offset reiskia, kad ta pati
+                # komanda vykdoma is naujo kas 10 min., ir botas niekada nepajudes toliau.
+                told_setup = self.step(f"Komanda {m.get('text', '')[:20]}",
+                                       lambda m=m, t=told_setup: self.one_command(m, t)) or told_setup
+            for cb in callbacks:
+                self.step(f"Mygtukas {cb.get('data', '')[:20]}", lambda cb=cb: self.one_callback(cb))
+        finally:
+            if offset != self.state.telegram_offset:
+                self.state.telegram_offset = offset
+                self.state.save()
+
+    def one_command(self, m, told_setup):
+        """Viena zinute. Grazina True, jei jau pasakem, kaip nustatyti ADMIN_IDS."""
+        if m["private"]:
+            reply = commands.handle_private(m, self.state)
+            print(f"Asmenine komanda ({m['name']}): {m['text'][:40]}")
+            self.tg.send_message(reply, chat_id=m["chat"])
+        elif commands.is_admin(m["user"]):
+            reply = commands.handle(m["text"], self.state)
+            if reply:
+                print(f"Komanda ({m['name']}): {m['text'][:50]}")
+                self.tg.send_message(reply)
+        elif not config.cfg.get("ADMIN_IDS") and not told_setup:
+            # Administratorius dar nenustatytas – anksciau komanda buvo tyliai ignoruojama,
+            # ir savininkas nesuprasdavo, kodel botas neatsako. Pasakom, ka daryti
+            # (ir jo paties ID – tai nieko neatskleidzia apie kitus).
+            print(f"Komanda neivykdyta – ADMIN_IDS tuscias ({m['name']}, ID {m['user']}): {m['text'][:40]}")
+            self.tg.send_message(commands.admin_setup_message(m["user"]))
+            return True
+        else:
+            # Grupeje komandos is kitu zmoniu ignoruojamos – nieko neatskleidziam
+            print(f"Ignoruota komanda grupeje ({m['name']}, ID {m['user']}): {m['text'][:40]}")
+        return False
+
+    def one_callback(self, cb):
+        answer = commands.handle_callback(cb, self.state)
+        print(f"Mygtukas ({cb['name']}): {cb['data']} -> {answer[:40]}")
+        self.tg.answer_callback(cb["id"], answer)
+
+    def status_of(self, source, uid, local_id, url=None):
+        """Skelbimo busena, uzklausiant saltini ne daugiau nei karta per paleidima.
+
+        Ta pati skelbima tikrina dvi dalys: „pardavimu patikra“ (rinkos kainoms) ir
+        „pranesimu rezultatai“ (ar nupirkta). Anksciau kiekviena kraudavo puslapi
+        atskirai – Vinted tai dvi uzklausos ir dvi pauzes tam paciam skelbimui."""
+        with self.lock:
+            if uid in self.statuses:
+                return self.statuses[uid]
+        st = source.status(local_id, url)
+        with self.lock:
+            self.statuses[uid] = st
+        if getattr(source, "detail_needs_request", True):
+            self.sleep(config.cfg["DETAIL_SLEEP_SECONDS"])
+        return st
 
     def check_sold(self):
         """Senus skelbimus tikrinam tame saltinyje, is kurio jie atejo.
@@ -370,13 +423,11 @@ class Run:
                 if self.out_of_time():
                     break
                 url = (self.state.market.get(uid) or {}).get("u")
-                st = source.status(local_id, url)
+                st = self.status_of(source, uid, local_id, url)
                 with self.lock:
                     self.state.market.set_status(uid, st)
                     if st in found:
                         found[st] += 1
-                if getattr(source, "detail_needs_request", True):
-                    self.sleep(config.cfg["DETAIL_SLEEP_SECONDS"])
 
         if config.cfg["PARALLEL_SOURCES"] and len(groups) > 1:
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
@@ -417,16 +468,19 @@ class Run:
             for uid, local_id in items:
                 if self.out_of_time():
                     break
-                st = source.status(local_id, tracker.items.get(uid, {}).get("u"))
+                st = self.status_of(source, uid, local_id, tracker.items.get(uid, {}).get("u"))
                 with self.lock:
                     tracker.update(uid, st)
+                    # Ta pati zinia naudinga ir rinkos kainoms: butent apie siuos skelbimus
+                    # zinom, kiek spejom (savikalibracijai), o cia ju pardavima pamatom
+                    # per minutes, ne po dvieju dienu, kai jie taps „pardavimu patikros“ eileje.
+                    if st in ("sold", "gone"):
+                        self.state.market.set_status(uid, st)
                     if st in ("sold", "reserved", "gone"):
                         found[st] = found.get(st, 0) + 1
                         e = tracker.items[uid]
                         print(f"  Rezultatas: iPhone {e.get('m')} {e.get('p', 0):.0f} EUR – {st} "
                               f"po {(e['e'] - e['t']) / 60:.0f} min.")
-                if getattr(source, "detail_needs_request", True):
-                    self.sleep(config.cfg["DETAIL_SLEEP_SECONDS"])
 
         workers = [(n, items) for n, items in groups.items()]
         if config.cfg["PARALLEL_SOURCES"] and len(workers) > 1:
@@ -530,6 +584,8 @@ class Run:
                 print(f"! {source.label} blokuoja uzklausas ({source.blocked_queries} paieskos is eiles) – "
                       "baigiu si saltini, tesim kitame paleidime.")
                 break
+            if self.alert_limit_reached():
+                break
             print(f"Tikrinama [{source.label}]: {source.describe(q)}...")
             listings = source.search(q, pages, seen)
             self.last_error = source.last_error or self.last_error
@@ -540,22 +596,33 @@ class Run:
             for listing in listings:
                 if self.out_of_time():
                     break
+                if self.alert_limit_reached():
+                    break
                 deal = self.evaluate(source, listing, drops)
                 if not deal:
                     continue
                 # Siuntimas ir irasymas – po vieną: kitaip lygiagretus saltiniai
                 # persidengtu Telegram zinutemis ir pustuciais failais.
                 with self.lock:
-                    self.alerts.append(deal)
-                    self.state.market.mark_alerted(deal["id"], deal["price"])
-                    if c["TRACK_RESULTS"]:
-                        self.state.tracker.add(deal)
                     rank = deal.get("rank")
                     # Pigiausiu budu garsiai – tik pats pigiausias (nuolaida cia remiasi
                     # ta pacia spejama verte, kuria ir nepasitikim)
                     silent = (rank.place != 1) if rank is not None \
                         else deal["discount"] < c["LOUD_DISCOUNT"]
-                    self.tg.send_deal(deal, silent=silent)
+                    if not self.tg.send_deal(deal, silent=silent):
+                        # Telegram neatsake (tinklo klaida, blokas). Anksciau dealas vis tiek
+                        # buvo pazymimas matytu ir „pranestu“, tad geras pasiulymas dingdavo
+                        # visam laikui. Dabar zymes nusiimam – kitas paleidimas bandys dar karta.
+                        self.new_seen.pop(deal["id"], None)
+                        self.new_seen.pop(deal.get("fp"), None)
+                        self.reject("nepavyko išsiųsti – bandysiu vėliau", deal["title"][:45])
+                        print(f"  ! [{source.label}] nepavyko issiusti iPhone {deal['model']} "
+                              f"{deal['price']:.0f} EUR – bandysiu kitame paleidime")
+                        continue
+                    self.alerts.append(deal)
+                    self.state.market.mark_alerted(deal["id"], deal["price"])
+                    if c["TRACK_RESULTS"]:
+                        self.state.tracker.add(deal)
                     self.send_personal(deal)
                     tag = f"atpigo nuo {deal['drop_from']:.0f}, " if deal["drop_from"] else ""
                     kiek = (f"{rank.place}-as pigiausias is {rank.n}" if rank is not None
@@ -837,7 +904,8 @@ def main():
     Ne nulis GitHub'e rodomas raudonai, ir GitHub pats atsiuncia laiska apie klaida."""
     config.load()
     if not config.BOT_TOKEN or not config.CHAT_ID:
-        print("Nenurodyti BOT_TOKEN / CHAT_ID (GitHub Secrets)!")
+        print("Nenurodyti BOT_TOKEN / CHAT_ID! GitHub'e jie paduodami is Secrets BOT ir TEL – "
+              "patikrink, ar tokie Secrets yra ir ar .github/workflows/vinted.yml juos naudoja.")
         return 2
     tg = Telegram()
     run = None

@@ -158,6 +158,20 @@ class Telegram:
         self.clock = clock
         self._last_sent = {}
 
+    def safe(self, text):
+        """Pasleps bot'o token'a. `requests` klaidos tekste yra VISAS adresas, o jame –
+        token'as: „...Max retries exceeded with url: /bot123:ABC/sendMessage“. Toks
+        tekstas keliaudavo tiesiai i log'a, o log'ai (ypac savo kompiuteryje ar
+        viesame repozitoriume) matomi. Token'as leidzia raso bot'o vardu, tad
+        pakeiciam ji zvaigdutemis."""
+        text = str(text)
+        if self.token:
+            text = text.replace(self.token, "***")
+            head = self.token.split(":")[0]       # „123456789“ – irgi nerodom
+            if head and len(head) > 4:
+                text = text.replace(head, "***")
+        return text
+
     def _throttle(self, chat_id):
         """Grupeje – ne dazniau nei kas GROUP_MIN_INTERVAL s (Telegram riba: 20 per minute).
         Grupiu ID neigiami; asmeniniams pokalbiams sios ribos nereikia."""
@@ -198,16 +212,16 @@ class Telegram:
             r = self._post("sendMessage", data, 15)
             if r.status_code == 400 and "parse" in (r.text or "").lower():
                 # Sugadintas HTML – siunciam paprastu tekstu, kad zinute nedingtu
-                print(f"  ! Telegram neperskaite HTML ({r.text[:100]}) – siunciu paprastu tekstu")
+                print(f"  ! Telegram neperskaite HTML ({self.safe(r.text[:100])}) – siunciu paprastu tekstu")
                 data = {k: v for k, v in data.items() if k != "parse_mode"}
                 data["text"] = plain_text(text)[:4096]
                 r = self._post("sendMessage", data, 15)
             if r.status_code != 200:
-                print(f"  ! Telegram klaida: {r.text[:150]}")
+                print(f"  ! Telegram klaida: {self.safe(r.text[:150])}")
                 return False
             return True
         except Exception as e:
-            print(f"  ! Nepavyko issiusti Telegram: {e}")
+            print(f"  ! Nepavyko issiusti Telegram: {self.safe(e)}")
             return False
 
     @staticmethod
@@ -233,12 +247,12 @@ class Telegram:
                     "parse_mode": "HTML", "reply_markup": keyboard, "disable_notification": silent}, 20)
                 if r.status_code == 200:
                     return True
-                print(f"  ! Telegram nuotraukos klaida: {r.text[:150]} – siunciu be nuotraukos")
+                print(f"  ! Telegram nuotraukos klaida: {self.safe(r.text[:150])} – siunciu be nuotraukos")
             except requests.Timeout:
                 print("  ! Telegram neatsake laiku – antra karta nesiunciu, kad nebutu dublikato")
                 return True
             except Exception as e:
-                print(f"  ! Nepavyko issiusti nuotraukos: {e} – siunciu be nuotraukos")
+                print(f"  ! Nepavyko issiusti nuotraukos: {self.safe(e)} – siunciu be nuotraukos")
         return self.send_message(caption, silent=silent, chat_id=chat_id)
 
     def get_updates(self, offset):
@@ -253,10 +267,11 @@ class Telegram:
                 "allowed_updates": json.dumps(["message", "callback_query"])}, timeout=15)
             data = r.json()
         except Exception as e:
-            print(f"  ! Nepavyko gauti Telegram komandu: {e}")
+            print(f"  ! Nepavyko gauti Telegram komandu: {self.safe(e)}")
             return [], [], offset
-        if not data.get("ok"):
-            print(f"  ! Telegram getUpdates: {str(data.get('description'))[:150]}")
+        if not isinstance(data, dict) or not data.get("ok"):
+            why = data.get("description") if isinstance(data, dict) else f"netiketas atsakymas: {type(data).__name__}"
+            print(f"  ! Telegram getUpdates: {self.safe(str(why)[:150])}")
             return [], [], offset
 
         messages, callbacks, new_offset = [], [], offset
@@ -288,5 +303,5 @@ class Telegram:
                 "callback_query_id": callback_id, "text": text[:200], "show_alert": alert}, timeout=15)
             return True
         except Exception as e:
-            print(f"  ! Nepavyko atsakyti i paspaudima: {e}")
+            print(f"  ! Nepavyko atsakyti i paspaudima: {self.safe(e)}")
             return False

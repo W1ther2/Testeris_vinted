@@ -74,6 +74,8 @@ TIPS = {
     "kalba": "užsienio kalba – normalu",
     "salis": "pardavėjas ne iš Lietuvos",
     "pardavejas": "per mažas pardavėjo įvertinimas (config.json MIN_SELLER_RATING)",
+    "nepavyko išsiųsti": "Telegram neatsakė – tie skelbimai bus išsiųsti kitame paleidime",
+    "pauzė": "įjungta pauzė – /testi",
 }
 
 
@@ -179,7 +181,11 @@ def handle_private(msg, state):
     """Komandos privačiame pokalbyje su botu (kiekvienam vartotojui atskirai).
     Administratoriui cia veikia ir visos nustatymu komandos."""
     text = msg.get("text", "").strip()
-    cmd = re.sub(r"^/(\w+).*", r"\1", text.split("@")[0]).lower()
+    # Tik pirmas zodis. Anksciau buvo re.sub(r"^/(\w+).*"), o `.` nesutampa su nauja
+    # eilute: „/start\nlabas“ duodavo cmd="start\nlabas", ir /start neveikdavo
+    # (zmogus negaudavo asmeniniu zinuciu, nors ir parase).
+    m = re.match(r"/(\w+)", text)
+    cmd = (m.group(1) if m else "").lower()
     user = state.user(msg.get("user"), msg.get("name"))
     if cmd in ("start", "pagalba", "help"):
         user["chat"] = msg.get("chat")
@@ -357,6 +363,7 @@ def handle(text, state):
                     f"Tik tvarkingi: {'taip' if c.get('TIDY_ONLY') else 'ne'}\n"
                     f"Rodyti pelną: {'taip' if c.get('SHOW_PROFIT') else 'ne'}\n"
                     f"Min. pelnas: {minp}\n"
+                    f"Daugiausiai per paleidimą: {c['MAX_ALERTS_PER_RUN'] or 'be ribos'}\n"
                     f"Pauzė: {'taip' if c.get('PAUSED') else 'ne'}\n"
                     f"Rankinės kainos: {', '.join(f'{k} = {v:.0f} €' for k, v in manual.items()) or 'nėra'}")
     except (ValueError, IndexError):

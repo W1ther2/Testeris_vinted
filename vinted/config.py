@@ -139,6 +139,11 @@ DEFAULTS = {
     "SHIPPING_COST": 3.5,            # siuntimo kaina perkant
 
     # --- Pranesimai ---
+    # Daugiausiai korteliu per viena paleidima (0 = be ribos). Apsauga nuo lavinos:
+    # jei seen.json / state.json kada nors pasimestu, visi skelbimai atrodytu nauji ir
+    # Telegram'as gautu desimtis korteliu is karto (o Telegram grupeje leidzia 20/min.).
+    # Likusieji nezymimi matytais – juos ivertins kitas paleidimas.
+    "MAX_ALERTS_PER_RUN": 20,
     "LOUD_DISCOUNT": 0.30,           # nuo tiek pigiau – su garsu, maziau – tyliai
     "TELEGRAM_COMMANDS": True,       # leisti keisti nustatymus komandomis Telegram'e
     # Kas gali keisti nustatymus. Tuscia = niekas (komandos grupeje ignoruojamos).
